@@ -2,5 +2,19 @@
 name = "booklid-rust"
 version = "0.1.0"
 edition = "2024"
+description = "MacBook lid angle as degrees + real-time stream"
+repository = ""
+
+[features]
+default = ["hidapi"]        # enable HID backend by default
+hidapi = ["dep:hidapi"]     # this ties the optional dep to the feature
+mock = []                   # optional mock backend
 
 [dependencies]
+thiserror = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+futures-core = "0.3"
+hidapi = { version = "2", optional = true }
+
+[dev-dependencies]
+anyhow = "1"

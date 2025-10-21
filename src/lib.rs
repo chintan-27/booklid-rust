@@ -1,14 +1,23 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+mod types;
+#[cfg(feature = "hidapi")]
+mod backend_hidapi;
+#[cfg(feature = "mock")]
+mod backend_mock;
+
+pub use types::{AngleSample, Error, Result, Source};
+
+use futures_core::Stream;
+
+pub trait AngleDevice: Send + Sync {
+    fn latest(&self) -> Option<AngleSample>;
+    fn stream(&self) -> &dyn Stream<Item = AngleSample>;
+    fn set_smoothing(&self, alpha: f32);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+pub async fn open_default(hz: f32) -> Result<Box<dyn AngleDevice>> {
+    #[cfg(feature = "hidapi")]
+    { return Ok(Box::new(backend_hidapi::HidAngle::open(hz).await?)); }
+    #[cfg(not(feature = "hidapi"))]
+    { let _ = hz; return Err(Error::Backend("no backend enabled".into())); }
 }
+
