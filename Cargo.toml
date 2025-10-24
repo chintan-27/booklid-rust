@@ -1,20 +1,9 @@
 [package]
 name = "booklid-rust"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "MacBook lid angle as degrees + real-time stream"
 repository = ""
-
-[dependencies]
-futures-core = "0.3"
-futures-util = "0.3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
-tokio-stream = { version = "0.1", features = ["sync"] }
-thiserror = "1"
-once_cell = "1"
-# Optional backends (link them to features)
-hidapi = { version = "2", optional = true }
-anyhow = { version = "1", optional = true }
 
 [features]
 default = ["mac_hid_feature"]
@@ -27,4 +16,22 @@ linux_iio_proxy = []
 linux_iio_sys = []
 mock = ["dep:anyhow"]
 diagnostics = []
+
+[dependencies]
+futures-core = "0.3"
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+thiserror = "1"
+once_cell = "1"
+# Optional backends (link them to features)
+hidapi = { version = "2", optional = true }
+anyhow = { version = "1", optional = true }
+
+[dev-dependencies]
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+
+
 
