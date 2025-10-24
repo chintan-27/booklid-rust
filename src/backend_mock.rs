@@ -1,6 +1,6 @@
 // src/backend_mock.rs
 use crate::{AngleDevice, AngleSample, AngleStream, Source};
-use futures_util::StreamExt;
+// use futures_util::StreamExt;
 use std::{
     sync::{Arc, Mutex},
     time::Instant,
@@ -9,7 +9,7 @@ use tokio::{
     sync::broadcast,
     time::{self, Duration},
 };
-use tokio_stream::wrappers::BroadcastStream;
+// use tokio_stream::wrappers::BroadcastStream;
 
 pub struct MockAngle {
     latest: Arc<Mutex<Option<AngleSample>>>,
@@ -64,21 +64,21 @@ impl MockAngle {
 }
 
 impl AngleDevice for MockAngle {
-    fn latest(&self) -> Option<AngleSample> {
-        *self.latest.lock().unwrap()
-    }
+    fn latest(&self) -> Option<AngleSample> { *self.latest.lock().unwrap() }
 
     fn subscribe(&self) -> AngleStream {
+        use futures_util::StreamExt;
+        use tokio_stream::wrappers::BroadcastStream;
         BroadcastStream::new(self.tx.subscribe())
-            .filter_map(|it| async move { it.ok() }) // drop lag/closed errors
+            .filter_map(|it| async move { it.ok() })
             .boxed()
     }
 
-    fn set_smoothing(&self, alpha: f32) {
-        *self.alpha.lock().unwrap() = alpha;
-    }
+    fn set_smoothing(&self, alpha: f32) { *self.alpha.lock().unwrap() = alpha; }
 
-    fn confidence(&self) -> f32 {
-        1.0
+    fn confidence(&self) -> f32 { 1.0 }
+
+    fn info(&self) -> crate::DeviceInfo {
+        crate::DeviceInfo { source: Source::Mock, note: "mock" }
     }
 }

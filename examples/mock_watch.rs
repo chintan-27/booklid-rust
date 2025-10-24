@@ -1,23 +1,17 @@
-#[cfg(feature = "mock")]
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    use booklid_rust::MockAngle; // re-exported from the crate root
-    use booklid_rust::AngleDevice;
+use booklid_rust::{open_with, OpenOptions};
 
-    let dev = MockAngle::open(60.0).await?;
-    dev.set_smoothing(0.3);
-    println!("Mock streaming… (Ctrl-C to exit)");
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Allow mock explicitly; run with: --no-default-features --features mock
+    let opts = OpenOptions::new(60.0).smoothing(0.3).allow_mock(true);
+    let dev = open_with(opts).await?;
+    println!("Mock/watch source={:?}", dev.info().source);
     loop {
         if let Some(s) = dev.latest() {
             println!("{:6.2}°  [{:?}]", s.angle_deg, s.source);
         } else {
-            println!("(waiting…)");
+            println!("(waiting for samples…)");
         }
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
-}
-
-#[cfg(not(feature = "mock"))]
-fn main() {
-    eprintln!("Enable the `mock` feature to run this example.");
 }
