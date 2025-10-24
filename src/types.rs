@@ -8,7 +8,7 @@ pub enum Error {
     Backend(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-    #[cfg(feature = "hidapi")]
+    #[cfg(feature = "mac_hid_feature")]
     #[error("hid error: {0}")]
     Hid(#[from] hidapi::HidError),
     #[error("other: {0}")]
@@ -23,4 +23,15 @@ pub struct AngleSample {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum Source { HingeFeature /* (future: HingeHID, HingeIOKit, ALS, etc.) */ }
+pub enum Source {
+    HingeFeature,
+    HingeHid,
+    HingeIOKit,
+    ALS,
+    WinHinge,
+    WinTilt,
+    WinALS,
+    LinuxTilt,
+    LinuxALS,
+    Mock,
+}

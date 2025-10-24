@@ -9,7 +9,7 @@ async fn main() -> booklid_rust::Result<()> {
         if let Some(s) = dev.latest() {
             println!("{:6.2}°  [{:?}]", s.angle_deg, s.source);
         } else {
-            println!("(waiting for hinge samples…)"); // <— add this line
+            println!("(waiting for hinge samples…)");
         }
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }

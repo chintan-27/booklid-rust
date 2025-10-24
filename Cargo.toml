@@ -5,16 +5,25 @@ edition = "2024"
 description = "MacBook lid angle as degrees + real-time stream"
 repository = ""
 
-[features]
-default = ["hidapi"]        # enable HID backend by default
-hidapi = ["dep:hidapi"]     # this ties the optional dep to the feature
-mock = []                   # optional mock backend
-
 [dependencies]
-thiserror = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 futures-core = "0.3"
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+thiserror = "1"
+# Optional backends (link them to features)
 hidapi = { version = "2", optional = true }
+anyhow = { version = "1", optional = true }
 
-[dev-dependencies]
-anyhow = "1"
+[features]
+default = ["mac_hid_feature"]
+mac_hid_feature = ["dep:hidapi"]
+mac_hid_discovery = []
+mac_iokit_raw = []
+mac_als = []
+win_sensors = []
+linux_iio_proxy = []
+linux_iio_sys = []
+mock = ["dep:anyhow"]         # keep mock opt-in and link its dep
+diagnostics = []
+

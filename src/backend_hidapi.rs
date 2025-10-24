@@ -1,5 +1,5 @@
-use crate::{AngleDevice, AngleSample, Result, Source};
-use futures_core::Stream;
+use crate::{AngleDevice, AngleSample, AngleStream, Result, Source};
+use futures_util::StreamExt;
 use std::{
     sync::{Arc, Mutex},
     time::Instant,
@@ -8,6 +8,7 @@ use tokio::{
     sync::broadcast,
     time::{self, Duration},
 };
+use tokio_stream::wrappers::BroadcastStream;
 
 pub struct HidAngle {
     latest: Arc<Mutex<Option<AngleSample>>>,
@@ -31,11 +32,11 @@ impl HidAngle {
             fn open_hinge(api: &hidapi::HidApi) -> Option<hidapi::HidDevice> {
                 // 1) Best: Usage Page = Sensor (0x20) + Usage = Orientation (0x008A)
                 for dev in api.device_list() {
-                    // On macOS these return u16, not Option<u16>.
                     let up = dev.usage_page();
                     let u = dev.usage();
                     if up == 0x20 && u == 0x008A {
                         if let Ok(h) = dev.open_device(api) {
+                            #[cfg(feature = "diagnostics")]
                             eprintln!(
                                 "[booklid] matched Sensor/Orientation: vid={:#06x} pid={:#06x}",
                                 dev.vendor_id(),
@@ -49,6 +50,7 @@ impl HidAngle {
                 for dev in api.device_list() {
                     if dev.vendor_id() == 0x05AC && dev.product_id() == 0x8104 {
                         if let Ok(h) = dev.open_device(api) {
+                            #[cfg(feature = "diagnostics")]
                             eprintln!(
                                 "[booklid] matched Apple VID/PID 0x05AC/0x8104 (fallback)."
                             );
@@ -63,6 +65,7 @@ impl HidAngle {
                             let mut probe = [0u8; 3];
                             probe[0] = 1;
                             if h.get_feature_report(&mut probe).is_ok() {
+                                #[cfg(feature = "diagnostics")]
                                 eprintln!(
                                     "[booklid] using Apple device responding to Feature#1: pid={:#06x}",
                                     dev.product_id()
@@ -80,14 +83,17 @@ impl HidAngle {
                 match hidapi::HidApi::new() {
                     Ok(a) => {
                         if let Some(h) = open_hinge(&a) {
+                            #[cfg(feature = "diagnostics")]
                             eprintln!("[booklid] hinge sensor opened.");
                             break (h, a);
                         } else {
+                            #[cfg(feature = "diagnostics")]
                             eprintln!("[booklid] hinge not found yet; retrying…");
                         }
                     }
-                    Err(e) => {
-                        eprintln!("[booklid] hid init failed: {e}");
+                    Err(_e) => {
+                        #[cfg(feature = "diagnostics")]
+                        eprintln!("[booklid] hid init failed: {}", _e);
                     }
                 }
                 tokio::time::sleep(Duration::from_millis(800)).await;
@@ -107,6 +113,7 @@ impl HidAngle {
 
                 let mut buf = [0u8; 3];
                 buf[0] = 1; // Feature Report ID 1
+
                 match hid.get_feature_report(&mut buf) {
                     Ok(_) => {
                         // buf = [report_id, lo, hi]
@@ -131,10 +138,12 @@ impl HidAngle {
                             timestamp: Instant::now(),
                             source: Source::HingeFeature,
                         };
+
                         *latest_c.lock().unwrap() = Some(sample);
                         let _ = tx_c.send(sample);
                     }
                     Err(_) => {
+                        #[cfg(feature = "diagnostics")]
                         eprintln!("[booklid] read failed; attempting re-open…");
                         if let Some(h) = open_hinge(&api) {
                             hid = h;
@@ -159,28 +168,18 @@ impl AngleDevice for HidAngle {
         *self.latest.lock().unwrap()
     }
 
-    fn stream(&self) -> &dyn Stream<Item = AngleSample> {
-        // Receiver-backed Stream; we box+leak so the reference outlives the call.
-        struct Rx(tokio::sync::broadcast::Receiver<AngleSample>);
-        impl Stream for Rx {
-            type Item = AngleSample;
-            fn poll_next(
-                mut self: std::pin::Pin<&mut Self>,
-                _cx: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Option<Self::Item>> {
-                match self.0.try_recv() {
-                    Ok(v) => std::task::Poll::Ready(Some(v)),
-                    Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
-                        std::task::Poll::Ready(None)
-                    }
-                    _ => std::task::Poll::Pending,
-                }
-            }
-        }
-        Box::leak(Box::new(Rx(self.tx.subscribe())))
+    fn subscribe(&self) -> AngleStream {
+        BroadcastStream::new(self.tx.subscribe())
+            .filter_map(|it| async move { it.ok() }) // drop lag/closed errors
+            .boxed()
     }
 
     fn set_smoothing(&self, alpha: f32) {
         *self.alpha.lock().unwrap() = alpha;
+    }
+
+    fn confidence(&self) -> f32 {
+        // Placeholder until Phase 3 implements acceptance/confidence.
+        1.0
     }
 }
