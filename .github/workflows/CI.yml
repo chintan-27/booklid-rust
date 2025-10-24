@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --all -- --check
+
+  build-and-test:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            default_features: true
+          - os: ubuntu-latest
+            default_features: false
+          - os: windows-latest
+            default_features: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check (default features)
+        if: matrix.default_features == 'true'
+        run: cargo check --all-targets
+      - name: cargo build examples (default features)
+        if: matrix.default_features == 'true'
+        run: cargo build --examples
+      - name: cargo check (no default features)
+        if: matrix.default_features == 'false'
+        run: cargo check --no-default-features --all-targets
+      - name: cargo test with mock (no default features)
+        if: matrix.default_features == 'false'
+        run: cargo test --no-default-features --features mock
