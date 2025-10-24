@@ -1,12 +1,15 @@
 # booklid-rust
 
-Simple API for reading your laptop lid angle (degrees) with async or blocking apps.
+Simple API for reading your laptop lid angle (degrees) with async or blocking apps. **Only works on macbooks bought after 2019**
 
 Why use this
 - One call to open a device, then read latest() or subscribe() to a stream.
 - Works in async and non-async programs.
 - Auto-reconnect on sensor hiccups; quiet by default, optional diagnostics.
 - Mock backend is opt-in for testing; never used in production by default.
+
+Device Support
+- Only works on MacBooks bought after 2019; support for other devices/platforms is coming in next versions.
 
 Install
 - Add the crate:
