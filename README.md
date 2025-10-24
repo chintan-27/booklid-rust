@@ -108,10 +108,6 @@ Examples
 - Mock watch (testing): cargo run --example mock_watch --no-default-features --features mock
 
 Troubleshooting
-- Tokio runtime error “rt-multi-thread disabled” → enable tokio features:
-  tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
-- Code “inactive due to #[cfg(feature = ...)]” → build with the feature:
-  cargo run --example watch --features diagnostics
 - macOS HID build issues → ensure Xcode Command Line Tools:
   xcode-select --install
 - “backend error: no backend enabled” → you built with no-default-features; enable a platform feature or use mock for testing.
