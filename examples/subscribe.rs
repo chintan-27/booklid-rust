@@ -1,4 +1,4 @@
-use booklid_rust::{open};
+use booklid_rust::open;
 use futures_util::StreamExt;
 
 #[tokio::main]

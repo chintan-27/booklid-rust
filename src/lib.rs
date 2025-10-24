@@ -56,8 +56,14 @@ impl OpenOptions {
             timeout: Duration::from_secs(3),
         }
     }
-    pub fn smoothing(mut self, alpha: f32) -> Self { self.smoothing_init = alpha; self }
-    pub fn allow_mock(mut self, ok: bool) -> Self { self.allow_mock = ok; self }
+    pub fn smoothing(mut self, alpha: f32) -> Self {
+        self.smoothing_init = alpha;
+        self
+    }
+    pub fn allow_mock(mut self, ok: bool) -> Self {
+        self.allow_mock = ok;
+        self
+    }
 }
 
 // Internal init config/report you already had (keep as-is if present)
@@ -71,7 +77,12 @@ pub struct InitConfig {
 }
 impl InitConfig {
     pub fn new(hz: f32) -> Self {
-        Self { hz, smoothing_init: 0.25, allow_mock: false, timeout: Duration::from_secs(3) }
+        Self {
+            hz,
+            smoothing_init: 0.25,
+            allow_mock: false,
+            timeout: Duration::from_secs(3),
+        }
     }
 }
 #[derive(Debug, Clone)]
@@ -148,7 +159,8 @@ pub async fn open_with(opts: OpenOptions) -> Result<AngleClient> {
         smoothing_init: opts.smoothing_init,
         allow_mock: opts.allow_mock,
         timeout: opts.timeout,
-    }).await?;
+    })
+    .await?;
     Ok(dev)
 }
 

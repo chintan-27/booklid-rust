@@ -51,9 +51,7 @@ impl HidAngle {
                     if dev.vendor_id() == 0x05AC && dev.product_id() == 0x8104 {
                         if let Ok(h) = dev.open_device(api) {
                             #[cfg(feature = "diagnostics")]
-                            eprintln!(
-                                "[booklid] matched Apple VID/PID 0x05AC/0x8104 (fallback)."
-                            );
+                            eprintln!("[booklid] matched Apple VID/PID 0x05AC/0x8104 (fallback).");
                             return Some(h);
                         }
                     }
@@ -164,7 +162,9 @@ impl HidAngle {
 }
 
 impl AngleDevice for HidAngle {
-    fn latest(&self) -> Option<AngleSample> { *self.latest.lock().unwrap() }
+    fn latest(&self) -> Option<AngleSample> {
+        *self.latest.lock().unwrap()
+    }
 
     fn subscribe(&self) -> AngleStream {
         use futures_util::StreamExt;
@@ -174,11 +174,18 @@ impl AngleDevice for HidAngle {
             .boxed()
     }
 
-    fn set_smoothing(&self, alpha: f32) { *self.alpha.lock().unwrap() = alpha; }
+    fn set_smoothing(&self, alpha: f32) {
+        *self.alpha.lock().unwrap() = alpha;
+    }
 
-    fn confidence(&self) -> f32 { 1.0 }
+    fn confidence(&self) -> f32 {
+        1.0
+    }
 
     fn info(&self) -> crate::DeviceInfo {
-        crate::DeviceInfo { source: Source::HingeFeature, note: "mac_hid_feature" }
+        crate::DeviceInfo {
+            source: Source::HingeFeature,
+            note: "mac_hid_feature",
+        }
     }
 }

@@ -64,7 +64,9 @@ impl MockAngle {
 }
 
 impl AngleDevice for MockAngle {
-    fn latest(&self) -> Option<AngleSample> { *self.latest.lock().unwrap() }
+    fn latest(&self) -> Option<AngleSample> {
+        *self.latest.lock().unwrap()
+    }
 
     fn subscribe(&self) -> AngleStream {
         use futures_util::StreamExt;
@@ -74,11 +76,18 @@ impl AngleDevice for MockAngle {
             .boxed()
     }
 
-    fn set_smoothing(&self, alpha: f32) { *self.alpha.lock().unwrap() = alpha; }
+    fn set_smoothing(&self, alpha: f32) {
+        *self.alpha.lock().unwrap() = alpha;
+    }
 
-    fn confidence(&self) -> f32 { 1.0 }
+    fn confidence(&self) -> f32 {
+        1.0
+    }
 
     fn info(&self) -> crate::DeviceInfo {
-        crate::DeviceInfo { source: Source::Mock, note: "mock" }
+        crate::DeviceInfo {
+            source: Source::Mock,
+            note: "mock",
+        }
     }
 }

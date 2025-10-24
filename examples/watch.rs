@@ -1,4 +1,4 @@
-use booklid_rust::{open};
+use booklid_rust::open;
 
 #[tokio::main]
 async fn main() -> booklid_rust::Result<()> {

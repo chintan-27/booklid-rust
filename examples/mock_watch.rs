@@ -1,4 +1,4 @@
-use booklid_rust::{open_with, OpenOptions};
+use booklid_rust::{OpenOptions, open_with};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
