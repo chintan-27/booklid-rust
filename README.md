@@ -10,10 +10,11 @@ Why use this
 
 Install
 - Add the crate:
-  cargo add booklid-rust
+
+  `cargo add booklid-rust --git https://github.com/chintan-27/booklid-rust --tag v0.2.0`
 - macOS: default feature mac_hid_feature is enabled and should “just work”.
 - Testing: enable the mock feature when you want synthetic data:
-  cargo add booklid-rust --features mock
+  `cargo add booklid-rust --git https://github.com/chintan-27/booklid-rust --tag v0.2.0 --features diagnostics or --features mock`
 
 Quickstart (async)
 ```rust
