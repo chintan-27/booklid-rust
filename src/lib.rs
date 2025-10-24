@@ -1,4 +1,6 @@
+use once_cell::sync::Lazy;
 mod types;
+
 
 #[cfg(feature = "mac_hid_feature")]
 mod backend_hidapi;
@@ -42,4 +44,14 @@ impl OpenConfig {
 }
 pub async fn open_with_config(cfg: OpenConfig) -> Result<AngleClient> {
     open_default(cfg.hz).await
+}
+
+static RUNTIME: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to init Tokio runtime")
+});
+pub fn open_blocking(hz: f32) -> Result<AngleClient> {
+    RUNTIME.block_on(open_default(hz))
 }
