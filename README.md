@@ -112,4 +112,4 @@ Troubleshooting
   xcode-select --install
 - “backend error: no backend enabled” → you built with no-default-features; enable a platform feature or use mock for testing.
 
-License - [MIT](https://github.com/chintan-27/booklid-rust?tab=MIT-1-ov-file#)
+License - [MIT](https://github.com/chintan-27/booklid-rust/blob/main/LICENSE)
