@@ -105,7 +105,7 @@ Examples
 - Async watch: cargo run --example watch
 - Blocking watch: cargo run --example watch_blocking
 - Subscribe: cargo run --example subscribe
-- Mock watch (testing): cargo run --example mock_watch --no-default-features --features mock
+- Mock watch (testing): cargo run --example mock_watch --no-default-features --features mock.
 
 Troubleshooting
 - macOS HID build issues → ensure Xcode Command Line Tools:
