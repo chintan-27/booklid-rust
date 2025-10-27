@@ -1,8 +1,8 @@
 [package]
 name = "booklid-rust"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
-description = "MacBook lid angle as degrees + real-time stream"
+description = "Macbook HID Discovery Mode"
 repository = ""
 
 [features]

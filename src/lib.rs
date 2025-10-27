@@ -45,6 +45,7 @@ pub struct OpenOptions {
     pub smoothing_init: f32,
     pub allow_mock: bool,
     pub timeout: Duration, // reserved for future, not used yet
+    pub discovery: bool,
 }
 
 impl OpenOptions {
@@ -54,6 +55,7 @@ impl OpenOptions {
             smoothing_init: 0.25,
             allow_mock: false,
             timeout: Duration::from_secs(3),
+            discovery: true,
         }
     }
     pub fn smoothing(mut self, alpha: f32) -> Self {
@@ -62,6 +64,10 @@ impl OpenOptions {
     }
     pub fn allow_mock(mut self, ok: bool) -> Self {
         self.allow_mock = ok;
+        self
+    }
+    pub fn discovery(mut self, on: bool) -> Self {
+        self.discovery = on;
         self
     }
 }
@@ -74,6 +80,7 @@ pub struct InitConfig {
     pub smoothing_init: f32,
     pub allow_mock: bool,
     pub timeout: Duration,
+    pub discovery: bool,
 }
 impl InitConfig {
     pub fn new(hz: f32) -> Self {
@@ -82,6 +89,7 @@ impl InitConfig {
             smoothing_init: 0.25,
             allow_mock: false,
             timeout: Duration::from_secs(3),
+            discovery: true,
         }
     }
 }
@@ -110,6 +118,23 @@ pub async fn init(cfg: InitConfig) -> Result<(AngleClient, SetupReport)> {
     {
         tried.push(Source::HingeFeature);
         if let Ok(dev) = backend_hidapi::HidAngle::open(cfg.hz).await {
+            let dev: AngleClient = Box::new(dev);
+            dev.set_smoothing(cfg.smoothing_init);
+            let report = SetupReport {
+                chosen: Some(Source::HingeFeature),
+                tried,
+                desktop_guard: guard,
+                used_mock: false,
+                duration: t0.elapsed(),
+            };
+            return Ok((dev, report));
+        }
+    }
+
+    #[cfg(feature = "mac_hid_feature")]
+    {
+        tried.push(Source::HingeFeature);
+        if let Ok(dev) = backend_hidapi::HidAngle::open_with(cfg.hz, cfg.discovery).await {
             let dev: AngleClient = Box::new(dev);
             dev.set_smoothing(cfg.smoothing_init);
             let report = SetupReport {
@@ -159,6 +184,7 @@ pub async fn open_with(opts: OpenOptions) -> Result<AngleClient> {
         smoothing_init: opts.smoothing_init,
         allow_mock: opts.allow_mock,
         timeout: opts.timeout,
+        discovery: opts.discovery,
     })
     .await?;
     Ok(dev)
@@ -175,6 +201,7 @@ pub fn open_blocking_with(opts: OpenOptions) -> Result<AngleClient> {
         smoothing_init: opts.smoothing_init,
         allow_mock: opts.allow_mock,
         timeout: opts.timeout,
+        discovery: opts.discovery,
     }))?;
     Ok(dev)
 }
