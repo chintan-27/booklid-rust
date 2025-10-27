@@ -3,6 +3,9 @@ mod types;
 #[cfg(feature = "mac_hid_feature")]
 mod backend_hidapi;
 
+#[cfg(feature = "mac_als")]
+mod backend_mac_als;
+
 #[cfg(feature = "mock")]
 mod backend_mock;
 
@@ -139,6 +142,23 @@ pub async fn init(cfg: InitConfig) -> Result<(AngleClient, SetupReport)> {
             dev.set_smoothing(cfg.smoothing_init);
             let report = SetupReport {
                 chosen: Some(Source::HingeFeature),
+                tried,
+                desktop_guard: guard,
+                used_mock: false,
+                duration: t0.elapsed(),
+            };
+            return Ok((dev, report));
+        }
+    }
+
+    #[cfg(feature = "mac_als")]
+    {
+        tried.push(Source::ALS);
+        if let Ok(dev) = backend_mac_als::AlsAngle::open(cfg.hz).await {
+            let dev: AngleClient = Box::new(dev);
+            dev.set_smoothing(cfg.smoothing_init);
+            let report = SetupReport {
+                chosen: Some(Source::ALS),
                 tried,
                 desktop_guard: guard,
                 used_mock: false,

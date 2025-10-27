@@ -23,7 +23,7 @@ impl HidAngle {
     }
 
     // NEW: allow caller to toggle discovery.
-    pub async fn open_with(hz: f32, discovery: bool) -> Result<Self> {
+    pub async fn open_with(hz: f32, _discovery: bool) -> Result<Self> {
         let latest = Arc::new(Mutex::new(None));
         let (tx, _rx) = broadcast::channel::<AngleSample>(256);
         let alpha: Arc<Mutex<f32>> = Arc::new(Mutex::new(0.25f32));
@@ -34,49 +34,54 @@ impl HidAngle {
 
         tokio::spawn(async move {
             fn open_hinge(api: &hidapi::HidApi) -> Option<hidapi::HidDevice> {
-                // 1) Best: Sensor/Orientation usage
+                // 1) Best: Usage Page = Sensor (0x20) + Usage = Orientation (0x008A)
                 for dev in api.device_list() {
                     let up = dev.usage_page();
                     let u = dev.usage();
-                    if up == 0x20 && u == 0x008A {
-                        if let Ok(h) = dev.open_device(api) {
+                    if up == 0x20
+                        && u == 0x008A
+                        && let Ok(h) = dev.open_device(api)
+                    {
+                        #[cfg(feature = "diagnostics")]
+                        eprintln!(
+                            "[booklid] matched Sensor/Orientation: vid={:#06x} pid={:#06x}",
+                            dev.vendor_id(),
+                            dev.product_id()
+                        );
+                        return Some(h);
+                    }
+                }
+
+                // 2) Fallback: Apple VID + commonly-seen PID (0x8104)
+                for dev in api.device_list() {
+                    if dev.vendor_id() == 0x05AC
+                        && dev.product_id() == 0x8104
+                        && let Ok(h) = dev.open_device(api)
+                    {
+                        #[cfg(feature = "diagnostics")]
+                        eprintln!("[booklid] matched Apple VID/PID 0x05AC/0x8104 (fallback).");
+                        return Some(h);
+                    }
+                }
+
+                // 3) Last resort: any Apple device that responds to Feature Report #1
+                for dev in api.device_list() {
+                    if dev.vendor_id() == 0x05AC
+                        && let Ok(h) = dev.open_device(api)
+                    {
+                        let mut probe = [0u8; 3];
+                        probe[0] = 1;
+                        if h.get_feature_report(&mut probe).is_ok() {
                             #[cfg(feature = "diagnostics")]
                             eprintln!(
-                                "[booklid] matched Sensor/Orientation: vid={:#06x} pid={:#06x}",
-                                dev.vendor_id(),
+                                "[booklid] using Apple device responding to Feature#1: pid={:#06x}",
                                 dev.product_id()
                             );
                             return Some(h);
                         }
                     }
                 }
-                // 2) Fallback: Apple VID/PID 0x05AC/0x8104
-                for dev in api.device_list() {
-                    if dev.vendor_id() == 0x05AC && dev.product_id() == 0x8104 {
-                        if let Ok(h) = dev.open_device(api) {
-                            #[cfg(feature = "diagnostics")]
-                            eprintln!("[booklid] matched Apple VID/PID 0x05AC/0x8104 (fallback).");
-                            return Some(h);
-                        }
-                    }
-                }
-                // 3) Last resort: any Apple that responds to Feature #1
-                for dev in api.device_list() {
-                    if dev.vendor_id() == 0x05AC {
-                        if let Ok(h) = dev.open_device(api) {
-                            let mut probe = [0u8; 3];
-                            probe[0] = 1;
-                            if h.get_feature_report(&mut probe).is_ok() {
-                                #[cfg(feature = "diagnostics")]
-                                eprintln!(
-                                    "[booklid] Apple device responding to Feature#1: pid={:#06x}",
-                                    dev.product_id()
-                                );
-                                return Some(h);
-                            }
-                        }
-                    }
-                }
+
                 None
             }
 
