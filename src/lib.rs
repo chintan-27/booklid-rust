@@ -21,7 +21,7 @@ pub type AngleClient = Box<dyn AngleDevice + Send + Sync>;
 // Device info returned by AngleDevice::info()
 #[derive(Clone, Debug)]
 pub struct DeviceInfo {
-    pub source: Source,
+    pub source: crate::Source,
     pub note: &'static str, // short backend note like "mac_hid_feature" or "mock"
 }
 
