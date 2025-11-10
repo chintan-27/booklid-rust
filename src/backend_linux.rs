@@ -263,29 +263,58 @@ fn query_proxy_lux() -> Option<f32> {
     None
 }
 
+fn first_existing(base: &PathBuf, names: &[&str]) -> Option<PathBuf> {
+    for n in names {
+        let p = base.join(n);
+        if p.exists() { return Some(p); }
+    }
+    None
+}
+
 fn find_iio_accel_device() -> Option<PathBuf> {
     for dev in glob::glob("/sys/bus/iio/devices/iio:device*").ok()? {
         let p = dev.ok()?;
-        if p.join("in_accel_x_raw").exists() && p.join("in_accel_y_raw").exists() && p.join("in_accel_z_raw").exists() {
-            return Some(p);
-        }
+        // Accept *_raw OR *_input
+        let have_x = first_existing(&p, &["in_accel_x_raw", "in_accel_x_input"]).is_some();
+        let have_y = first_existing(&p, &["in_accel_y_raw", "in_accel_y_input"]).is_some();
+        let have_z = first_existing(&p, &["in_accel_z_raw", "in_accel_z_input"]).is_some();
+        if have_x && have_y && have_z { return Some(p); }
     }
     None
 }
 
 fn read_accel_triplet(dev: &PathBuf) -> Option<(f32,f32,f32)> {
-    let rx = fs::read_to_string(dev.join("in_accel_x_raw")).ok()?.trim().parse::<f32>().ok()?;
-    let ry = fs::read_to_string(dev.join("in_accel_y_raw")).ok()?.trim().parse::<f32>().ok()?;
-    let rz = fs::read_to_string(dev.join("in_accel_z_raw")).ok()?.trim().parse::<f32>().ok()?;
-    // scale if available
-    let scale = fs::read_to_string(dev.join("in_accel_scale")).ok().and_then(|s| s.trim().parse::<f32>().ok()).unwrap_or(1.0);
-    Some((rx*scale, ry*scale, rz*scale))
+    let rxp = first_existing(dev, &["in_accel_x_raw", "in_accel_x_input"])?;
+    let ryp = first_existing(dev, &["in_accel_y_raw", "in_accel_y_input"])?;
+    let rzp = first_existing(dev, &["in_accel_z_raw", "in_accel_z_input"])?;
+    let sxp = first_existing(dev, &["in_accel_scale", "in_accel_x_scale"]);
+    let syp = first_existing(dev, &["in_accel_scale", "in_accel_y_scale"]);
+    let szp = first_existing(dev, &["in_accel_scale", "in_accel_z_scale"]);
+
+    let rx = fs::read_to_string(rxp).ok()?.trim().parse::<f32>().ok()?;
+    let ry = fs::read_to_string(ryp).ok()?.trim().parse::<f32>().ok()?;
+    let rz = fs::read_to_string(rzp).ok()?.trim().parse::<f32>().ok()?;
+
+    // Some drivers expose per-axis scales; default to 1.0 if absent.
+    let sx = sxp.and_then(|p| fs::read_to_string(p).ok()?.trim().parse::<f32>().ok()).unwrap_or(1.0);
+    let sy = syp.and_then(|p| fs::read_to_string(p).ok()?.trim().parse::<f32>().ok()).unwrap_or(1.0);
+    let sz = szp.and_then(|p| fs::read_to_string(p).ok()?.trim().parse::<f32>().ok()).unwrap_or(1.0);
+
+    Some((rx*sx, ry*sy, rz*sz))
 }
 
 fn find_iio_light_device() -> Option<PathBuf> {
     for dev in glob::glob("/sys/bus/iio/devices/iio:device*").ok()? {
         let p = dev.ok()?;
-        if p.join("in_illuminance_raw").exists() {
+        // A bunch of ALS variants exist; accept any of these:
+        if first_existing(&p, &[
+            "in_illuminance_raw",
+            "in_illuminance_input",
+            "in_illuminance0_raw",
+            "in_illuminance0_input",
+            "in_intensity_both_raw",
+            "in_intensity_input",
+        ]).is_some() {
             return Some(p);
         }
     }
@@ -293,7 +322,26 @@ fn find_iio_light_device() -> Option<PathBuf> {
 }
 
 fn read_lux(dev: &PathBuf) -> Option<f32> {
-    let raw = fs::read_to_string(dev.join("in_illuminance_raw")).ok()?.trim().parse::<f32>().ok()?;
-    let scale = fs::read_to_string(dev.join("in_illuminance_scale")).ok().and_then(|s| s.trim().parse::<f32>().ok()).unwrap_or(1.0);
+    let valp = first_existing(dev, &[
+        "in_illuminance_raw",
+        "in_illuminance_input",
+        "in_illuminance0_raw",
+        "in_illuminance0_input",
+        "in_intensity_both_raw",
+        "in_intensity_input",
+    ])?;
+    let raw = fs::read_to_string(valp).ok()?.trim().parse::<f32>().ok()?;
+
+    // Try scale names; fall back to 1.0 if none found.
+    let scalep = first_existing(dev, &[
+        "in_illuminance_scale",
+        "in_illuminance0_scale",
+        "in_intensity_scale",
+        "in_intensity0_scale",
+    ]);
+    let scale = scalep
+        .and_then(|p| fs::read_to_string(p).ok()?.trim().parse::<f32>().ok())
+        .unwrap_or(1.0);
+
     Some(raw * scale)
 }
