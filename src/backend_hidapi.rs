@@ -23,7 +23,7 @@ impl HidAngle {
     }
 
     // NEW: allow caller to toggle discovery.
-    pub async fn open_with(hz: f32, _discovery: bool) -> Result<Self> {
+    pub async fn open_with(hz: f32, discovery: bool) -> Result<Self> {
         let latest = Arc::new(Mutex::new(None));
         let (tx, _rx) = broadcast::channel::<AngleSample>(256);
         let alpha: Arc<Mutex<f32>> = Arc::new(Mutex::new(0.25f32));
@@ -108,11 +108,9 @@ impl HidAngle {
 
             // Optional discovery: probe feature report IDs 1..=8 quickly.
             #[cfg(feature = "mac_hid_discovery")]
+            // AFTER
             let report_id: u8 = if discovery {
-                match probe_report_id(&mut hid, 1..=8, Duration::from_millis(400)) {
-                    Some(best) => best,
-                    None => 1,
-                }
+                probe_report_id(&mut hid, 1..=8, Duration::from_millis(400)).unwrap_or(1)
             } else {
                 1
             };

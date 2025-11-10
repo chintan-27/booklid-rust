@@ -13,6 +13,8 @@ pub enum Error {
     Hid(#[from] hidapi::HidError),
     #[error("other: {0}")]
     Other(String),
+    #[error("no suitable backend available; tried: {tried:?}")]
+    NoBackend { tried: Vec<Source> }, // NEW
 }
 
 #[derive(Clone, Copy, Debug)]

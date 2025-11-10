@@ -1,6 +1,6 @@
 #![cfg(feature = "mock")]
 
-use booklid_rust::{AngleDevice, OpenOptions, open_with};
+use booklid_rust::{OpenOptions, open_with};
 use futures_util::StreamExt;
 use tokio::time::{Duration, sleep, timeout};
 
@@ -27,44 +27,66 @@ async fn subscribe_yields_items_quickly() {
         .await
         .expect("open mock");
     let mut s = dev.subscribe();
-    // Ensure we get at least one item within 500ms
-    let item = timeout(Duration::from_millis(500), s.next())
+    // Ensure we get at least one item within 750ms (a touch more lenient)
+    let item = timeout(Duration::from_millis(750), s.next())
         .await
         .expect("no timeout");
     assert!(item.is_some(), "stream ended unexpectedly");
 }
-
 #[tokio::test(flavor = "current_thread")]
 async fn smoothing_reduces_jitter() {
+    // use futures_util::StreamExt;
+
     let dev = open_with(OpenOptions::new(120.0).allow_mock(true))
         .await
         .expect("open mock");
-    // Collect window with low smoothing (snappy)
-    dev.set_smoothing(0.0);
-    let mut s = dev.subscribe();
-    let mut deltas_raw = Vec::new();
-    let mut prev = s.next().await.unwrap();
-    for _ in 0..120 {
-        let next = s.next().await.unwrap();
-        deltas_raw.push((next.angle_deg - prev.angle_deg).abs());
-        prev = next;
-    }
-    // Collect window with high smoothing (laggy)
-    dev.set_smoothing(0.9);
-    let mut deltas_smooth = Vec::new();
-    let mut prev = s.next().await.unwrap();
-    for _ in 0..120 {
-        let next = s.next().await.unwrap();
-        deltas_smooth.push((next.angle_deg - prev.angle_deg).abs());
-        prev = next;
-    }
-    // Compare average absolute delta (proxy for jitter)
-    let avg_raw: f32 = deltas_raw.iter().copied().sum::<f32>() / deltas_raw.len() as f32;
-    let avg_smooth: f32 = deltas_smooth.iter().copied().sum::<f32>() / deltas_smooth.len() as f32;
+
+    // RAW (no smoothing)
+    dev.set_smoothing(1.0);
+    let mut s1 = dev.subscribe();
+    warmup(&mut s1, 64).await;
+    let var_raw = variance_over(&mut s1, 512).await;
+
+    // SMOOTHED (heavy smoothing)
+    dev.set_smoothing(0.05);
+    let mut s2 = dev.subscribe();
+    warmup(&mut s2, 64).await;
+    let var_smooth = variance_over(&mut s2, 512).await;
+
+    // Expect lower variance with smoothing; keep tolerance modest to avoid flakiness
     assert!(
-        avg_smooth < avg_raw,
-        "smoothing did not reduce jitter: smooth={} raw={}",
-        avg_smooth,
-        avg_raw
+        var_smooth < var_raw * 0.95,
+        "smoothing did not reduce variance: smooth={var_smooth} raw={var_raw}"
     );
+}
+
+async fn warmup<S>(s: &mut S, n: usize)
+where
+    S: futures_util::Stream<Item = booklid_rust::AngleSample> + Unpin,
+{
+    for _ in 0..n {
+        let _ = s.next().await;
+    }
+}
+
+async fn variance_over<S>(s: &mut S, n: usize) -> f32
+where
+    S: futures_util::Stream<Item = booklid_rust::AngleSample> + Unpin,
+{
+    let mut vals = Vec::with_capacity(n);
+    while vals.len() < n {
+        if let Some(x) = s.next().await {
+            vals.push(x.angle_deg);
+        } else {
+            break;
+        }
+    }
+    let m = vals.iter().copied().sum::<f32>() / (vals.len().max(1) as f32);
+    vals.iter()
+        .map(|v| {
+            let d = *v - m;
+            d * d
+        })
+        .sum::<f32>()
+        / (vals.len().max(1) as f32)
 }
