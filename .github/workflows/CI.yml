@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo clippy --all-targets --all-features -D warnings
 
   build-and-test:
     strategy:
@@ -51,6 +51,23 @@ jobs:
       - name: cargo test with mock (no default features)
         if: matrix.default_features == 'false'
         run: cargo test --no-default-features --features mock
+
+      - name: cargo check (win build)
+        if: matrix.os == 'windows-latest'
+        run: cargo check --no-default-features --features win_sensors --all-targets
+
+      # linux build with /sys path
+      - name: cargo check (linux iio sys)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo check --no-default-features --features linux_iio_sys --all-targets
+
+      # optional short example run (Linux ALS or Tilt if present)
+      - name: example (linux sys, short)
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          BOOKLID_CI: "1"
+          BOOKLID_DESKTOP: "1"
+        run: cargo run --no-default-features --features linux_iio_sys --example watch
 
   # Short async example run using ALS on Linux to verify happy path
   example-run-als:

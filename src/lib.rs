@@ -9,6 +9,15 @@ mod backend_mac_als;
 #[cfg(feature = "mock")]
 mod backend_mock;
 
+#[cfg(all(target_os = "windows", feature = "win_sensors"))]
+mod backend_win;
+
+#[cfg(all(
+    target_os = "linux",
+    any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
+))]
+mod backend_linux;
+
 pub mod types;
 pub use crate::types::{AngleSample, Error, Result, Source};
 
@@ -311,6 +320,94 @@ pub async fn init(cfg: InitConfig) -> Result<(AngleClient, SetupReport)> {
                 tried,
                 desktop_guard: guard,
                 used_mock: true,
+                duration: t0.elapsed(),
+            };
+            return Ok((dev, report));
+        }
+    }
+
+    // Windows sensors chain
+    #[cfg(all(target_os = "windows", feature = "win_sensors"))]
+    {
+        // Prefer hinge, then tilt, then ALS
+        tried.push(Source::WinHinge);
+        if let Ok(dev) = backend_win::WinAngle::open_hinge(cfg.hz).await {
+            let dev: AngleClient = Box::new(dev);
+            dev.set_smoothing(cfg.smoothing_init);
+            let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
+            let report = SetupReport {
+                chosen: Some(Source::WinHinge),
+                tried,
+                desktop_guard: guard,
+                used_mock: false,
+                duration: t0.elapsed(),
+            };
+            return Ok((dev, report));
+        }
+
+        tried.push(Source::WinTilt);
+        if let Ok(dev) = backend_win::WinAngle::open_tilt(cfg.hz).await {
+            let dev: AngleClient = Box::new(dev);
+            dev.set_smoothing(cfg.smoothing_init);
+            let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
+            let report = SetupReport {
+                chosen: Some(Source::WinTilt),
+                tried,
+                desktop_guard: guard,
+                used_mock: false,
+                duration: t0.elapsed(),
+            };
+            return Ok((dev, report));
+        }
+
+        tried.push(Source::WinALS);
+        if let Ok(dev) = backend_win::WinAngle::open_als(cfg.hz).await {
+            let dev: AngleClient = Box::new(dev);
+            dev.set_smoothing(cfg.smoothing_init);
+            let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
+            let report = SetupReport {
+                chosen: Some(Source::WinALS),
+                tried,
+                desktop_guard: guard,
+                used_mock: false,
+                duration: t0.elapsed(),
+            };
+            return Ok((dev, report));
+        }
+    }
+
+    // Linux iio chain
+    #[cfg(all(
+        target_os = "linux",
+        any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
+    ))]
+    {
+        // First try dbus (iio-sensor-proxy), then direct /sys
+        tried.push(Source::LinuxTilt);
+        if let Ok(dev) = backend_linux::LinuxAngle::open_tilt(cfg.hz).await {
+            let dev: AngleClient = Box::new(dev);
+            dev.set_smoothing(cfg.smoothing_init);
+            let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
+            let report = SetupReport {
+                chosen: Some(Source::LinuxTilt),
+                tried,
+                desktop_guard: guard,
+                used_mock: false,
+                duration: t0.elapsed(),
+            };
+            return Ok((dev, report));
+        }
+
+        tried.push(Source::LinuxALS);
+        if let Ok(dev) = backend_linux::LinuxAngle::open_als(cfg.hz).await {
+            let dev: AngleClient = Box::new(dev);
+            dev.set_smoothing(cfg.smoothing_init);
+            let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
+            let report = SetupReport {
+                chosen: Some(Source::LinuxALS),
+                tried,
+                desktop_guard: guard,
+                used_mock: false,
                 duration: t0.elapsed(),
             };
             return Ok((dev, report));
