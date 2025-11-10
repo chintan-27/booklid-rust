@@ -25,9 +25,16 @@ use futures_util::stream::BoxStream;
 use once_cell::sync::Lazy;
 use std::time::{Duration, Instant};
 
-// If *no* backend feature is enabled, produce a helpful compile error.
-#[cfg(not(any(feature = "mac_hid_feature", feature = "mac_als", feature = "mock")))]
-compile_error!("Enable at least one backend feature: `mac_hid_feature`, `mac_als`, or `mock`.");
+const HAS_BACKENDS: bool = cfg!(any(
+    feature = "mac_hid_feature",
+    feature = "mac_als",
+    feature = "mock",
+    all(target_os = "windows", feature = "win_sensors"),
+    all(
+        target_os = "linux",
+        any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
+    )
+));
 
 pub type AngleStream = BoxStream<'static, AngleSample>;
 pub type AngleClient = Box<dyn AngleDevice + Send + Sync>;
@@ -141,7 +148,16 @@ fn desktop_guard() -> bool {
 
 // ===== Confidence gate wrapper (only used when any backend feature is enabled) =====
 
-#[cfg(any(feature = "mac_hid_feature", feature = "mac_als", feature = "mock"))]
+#[cfg(any(
+    feature = "mac_hid_feature",
+    feature = "mac_als",
+    feature = "mock",
+    all(target_os = "windows", feature = "win_sensors"),
+    all(
+        target_os = "linux",
+        any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
+    )
+))]
 mod gating {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -204,12 +220,26 @@ mod gating {
     }
 }
 
-#[cfg(any(feature = "mac_hid_feature", feature = "mac_als", feature = "mock"))]
+#[cfg(any(
+    feature = "mac_hid_feature",
+    feature = "mac_als",
+    feature = "mock",
+    all(target_os = "windows", feature = "win_sensors"),
+    all(
+        target_os = "linux",
+        any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
+    )
+))]
 use gating::Gated;
 
 // ===== Unified init (mac-first today) =====
 
 pub async fn init(cfg: InitConfig) -> Result<(AngleClient, SetupReport)> {
+    if !HAS_BACKENDS {
+        return Err(Error::Backend(
+            "no backends enabled; enable one of: mac_hid_feature, mac_als, mock, win_sensors, linux_iio_proxy, linux_iio_sys".into()
+        ));
+    }
     let t0 = Instant::now();
     #[allow(unused_mut)]
     let mut tried: Vec<Source> = Vec::new();
