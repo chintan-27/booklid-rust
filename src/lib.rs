@@ -275,8 +275,37 @@ pub async fn init(cfg: InitConfig) -> Result<(AngleClient, SetupReport)> {
                 return Ok((dev, report));
             }
         }
-        // No ALS available or failed
-        let msg = format!("no suitable backend available; tried: {tried:?}");
+        // LINUX ALS (when linux_iio_* features are enabled)
+        #[cfg(all(
+            target_os = "linux",
+            any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
+        ))]
+        {
+            tried.push(Source::LinuxALS);
+            if let Ok(dev) = backend_linux::LinuxAngle::open_als(cfg.hz).await {
+                let dev: AngleClient = Box::new(dev);
+                dev.set_smoothing(cfg.smoothing_init);
+                let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
+                let report = SetupReport {
+                    chosen: Some(Source::LinuxALS),
+                    tried,
+                    desktop_guard: guard,
+                    used_mock: false,
+                    duration: t0.elapsed(),
+                };
+                return Ok((dev, report));
+            }
+        }
+
+        let msg = if cfg!(all(
+            target_os = "linux",
+            any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
+        )) && !std::path::Path::new("/sys/bus/iio/devices").exists()
+        {
+            format!("no IIO subsystem found at /sys/bus/iio/devices; tried: {tried:?}")
+        } else {
+            format!("no suitable backend available; tried: {tried:?}")
+        };
         return Err(Error::Backend(msg));
     }
 
