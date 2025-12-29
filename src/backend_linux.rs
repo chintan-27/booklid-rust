@@ -442,25 +442,6 @@ impl AngleDevice for LinuxAngle {
 // ==== helpers ====
 
 #[cfg(feature = "linux_iio_proxy")]
-fn proxy() -> Option<ZProxy<'static>> {
-    // iio-sensor-proxy is on the SYSTEM bus
-    let conn = ZConn::system().ok()?;
-    let p = ZProxy::new(
-        &conn,
-        "net.hadess.SensorProxy",
-        "/net/hadess/SensorProxy",
-        "net.hadess.SensorProxy",
-    )
-    .ok()?;
-
-    // NOTE: This returns a proxy borrowing `conn`, but we only use it within the
-    // same function call chain (query_* below), so no leaking needed here.
-    // We convert to 'static by re-creating it each time and keeping it local.
-    let _ = p;
-    None
-}
-
-#[cfg(feature = "linux_iio_proxy")]
 fn query_proxy_pitch_degrees() -> Option<f32> {
     let conn = ZConn::system().ok()?;
     let p = ZProxy::new(

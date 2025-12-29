@@ -27,26 +27,24 @@ pub struct WinAngle {
 
 impl WinAngle {
     pub async fn open_hinge(hz: f32) -> Result<Self> {
-        // windows-rs 0.58: call statics via the statics interface helper.
-        let sensor = HingeAngleSensor::IHingeAngleSensorStatics(|s| s.GetDefault())
+        // windows-rs 0.58: GetDefault is not available, but GetDefaultAsync is.
+        let op = HingeAngleSensor::IHingeAngleSensorStatics(|s| s.GetDefaultAsync())
+            .map_err(|e| Error::Backend(format!("win hinge: {e:?}")))?;
+        let sensor = op
+            .await
             .map_err(|e| Error::Backend(format!("win hinge: {e:?}")))?;
         Self::spawn_from_hinge(sensor, hz).await
     }
 
     pub async fn open_tilt(hz: f32) -> Result<Self> {
-        unsafe {
-            let incl = Inclinometer::GetDefault()
-                .map_err(|e| Error::Backend(format!("win inclinometer: {e:?}")))?;
-            Self::spawn_from_tilt(incl, hz).await
-        }
+        let incl =
+            Inclinometer::GetDefault().map_err(|e| Error::Backend(format!("win inclinometer: {e:?}")))?;
+        Self::spawn_from_tilt(incl, hz).await
     }
 
     pub async fn open_als(hz: f32) -> Result<Self> {
-        unsafe {
-            let ls = LightSensor::GetDefault()
-                .map_err(|e| Error::Backend(format!("win light: {e:?}")))?;
-            Self::spawn_from_als(ls, hz).await
-        }
+        let ls = LightSensor::GetDefault().map_err(|e| Error::Backend(format!("win light: {e:?}")))?;
+        Self::spawn_from_als(ls, hz).await
     }
 
     async fn spawn_from_hinge(sensor: HingeAngleSensor, hz: f32) -> Result<Self> {
@@ -69,20 +67,22 @@ impl WinAngle {
             let angle_cell = Arc::new(Mutex::new(None::<f32>));
             let angle_cell_c = angle_cell.clone();
 
+            // Keep token alive in this task
             let _token = sensor
-                .ReadingChanged(&TypedEventHandler::<
-                    HingeAngleSensor,
-                    HingeAngleSensorReadingChangedEventArgs,
-                >::new(move |_, args| {
-                    if let Some(args) = args.as_ref() {
-                        if let Ok(reading) = args.Reading() {
-                            if let Ok(deg) = reading.AngleInDegrees() {
-                                *angle_cell_c.lock().unwrap() = Some(deg as f32);
+                .ReadingChanged(
+                    &TypedEventHandler::<HingeAngleSensor, HingeAngleSensorReadingChangedEventArgs>::new(
+                        move |_, args| {
+                            if let Some(args) = args.as_ref() {
+                                if let Ok(reading) = args.Reading() {
+                                    if let Ok(deg) = reading.AngleInDegrees() {
+                                        *angle_cell_c.lock().unwrap() = Some(deg as f32);
+                                    }
+                                }
                             }
-                        }
-                    }
-                    Ok(())
-                }))
+                            Ok(())
+                        },
+                    ),
+                )
                 .ok();
 
             let mut smoothed: Option<f32> = None;
@@ -162,41 +162,43 @@ impl WinAngle {
 
             loop {
                 interval.tick().await;
-                if let Some(r) = reading {
-                    let pitch = r.PitchDegrees().unwrap_or(0.0) as f32;
-                    let deg = pitch.clamp(-180.0, 180.0);
 
-                    let a = (*alpha_c.lock().unwrap()).clamp(0.0, 1.0);
-                    let s = match smoothed {
-                        None => deg,
-                        Some(prev) => prev + a * (deg - prev),
-                    };
-                    smoothed = Some(s);
+                if let Ok(r) = incl.GetCurrentReading() {
+                    if let Ok(pitch) = r.PitchDegrees() {
+                        let deg = (pitch as f32).clamp(-180.0, 180.0);
 
-                    if buf.len() == 64 {
-                        buf.pop_front();
+                        let a = (*alpha_c.lock().unwrap()).clamp(0.0, 1.0);
+                        let s = match smoothed {
+                            None => deg,
+                            Some(prev) => prev + a * (deg - prev),
+                        };
+                        smoothed = Some(s);
+
+                        if buf.len() == 64 {
+                            buf.pop_front();
+                        }
+                        buf.push_back(s);
+                        let n = buf.len() as f32;
+                        let mean = buf.iter().copied().sum::<f32>() / n;
+                        let var = buf
+                            .iter()
+                            .map(|v| {
+                                let d = *v - mean;
+                                d * d
+                            })
+                            .sum::<f32>()
+                            / n;
+                        let stability = (1.0 / (1.0 + 0.05 * var)).clamp(0.0, 1.0);
+                        *conf_c.lock().unwrap() = stability;
+
+                        let sample = AngleSample {
+                            angle_deg: s,
+                            timestamp: Instant::now(),
+                            source: Source::WinTilt,
+                        };
+                        *latest_c.lock().unwrap() = Some(sample);
+                        let _ = tx_c.send(sample);
                     }
-                    buf.push_back(s);
-                    let n = buf.len() as f32;
-                    let mean = buf.iter().copied().sum::<f32>() / n;
-                    let var = buf
-                        .iter()
-                        .map(|v| {
-                            let d = *v - mean;
-                            d * d
-                        })
-                        .sum::<f32>()
-                        / n;
-                    let stability = (1.0 / (1.0 + 0.05 * var)).clamp(0.0, 1.0);
-                    *conf_c.lock().unwrap() = stability;
-
-                    let sample = AngleSample {
-                        angle_deg: s,
-                        timestamp: Instant::now(),
-                        source: Source::WinTilt,
-                    };
-                    *latest_c.lock().unwrap() = Some(sample);
-                    let _ = tx_c.send(sample);
                 }
             }
         });
@@ -231,43 +233,46 @@ impl WinAngle {
 
             loop {
                 interval.tick().await;
-                if let Some(r) = reading {
-                    let lux = r.IlluminanceInLux().unwrap_or(1.0) as f32;
 
-                    baseline = 0.995 * baseline + 0.005 * lux;
-                    let val = lux - baseline;
-                    let n = (val * 0.02 + 0.5).clamp(0.0, 1.0);
+                if let Ok(r) = ls.GetCurrentReading() {
+                    if let Ok(lux) = r.IlluminanceInLux() {
+                        let lux = lux as f32;
 
-                    let a = (*alpha_c.lock().unwrap()).clamp(0.0, 1.0);
-                    let s = match smoothed {
-                        None => n,
-                        Some(prev) => prev + a * (n - prev),
-                    };
-                    smoothed = Some(s);
+                        baseline = 0.995 * baseline + 0.005 * lux;
+                        let val = lux - baseline;
+                        let n = (val * 0.02 + 0.5).clamp(0.0, 1.0);
 
-                    if buf.len() == 64 {
-                        buf.pop_front();
+                        let a = (*alpha_c.lock().unwrap()).clamp(0.0, 1.0);
+                        let s = match smoothed {
+                            None => n,
+                            Some(prev) => prev + a * (n - prev),
+                        };
+                        smoothed = Some(s);
+
+                        if buf.len() == 64 {
+                            buf.pop_front();
+                        }
+                        buf.push_back(s);
+                        let m = buf.iter().copied().sum::<f32>() / (buf.len() as f32);
+                        let v = buf
+                            .iter()
+                            .map(|v| {
+                                let d = *v - m;
+                                d * d
+                            })
+                            .sum::<f32>()
+                            / (buf.len() as f32);
+                        let stability = (1.0 / (1.0 + 20.0 * v)).clamp(0.0, 1.0);
+                        *conf_c.lock().unwrap() = stability;
+
+                        let sample = AngleSample {
+                            angle_deg: s,
+                            timestamp: Instant::now(),
+                            source: Source::WinALS,
+                        };
+                        *latest_c.lock().unwrap() = Some(sample);
+                        let _ = tx_c.send(sample);
                     }
-                    buf.push_back(s);
-                    let m = buf.iter().copied().sum::<f32>() / (buf.len() as f32);
-                    let v = buf
-                        .iter()
-                        .map(|v| {
-                            let d = *v - m;
-                            d * d
-                        })
-                        .sum::<f32>()
-                        / (buf.len() as f32);
-                    let stability = (1.0 / (1.0 + 20.0 * v)).clamp(0.0, 1.0);
-                    *conf_c.lock().unwrap() = stability;
-
-                    let sample = AngleSample {
-                        angle_deg: s,
-                        timestamp: Instant::now(),
-                        source: Source::WinALS,
-                    };
-                    *latest_c.lock().unwrap() = Some(sample);
-                    let _ = tx_c.send(sample);
                 }
             }
         });
