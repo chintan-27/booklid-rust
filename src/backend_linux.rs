@@ -472,7 +472,7 @@ fn query_proxy_pitch_degrees() -> Option<f32> {
     .ok()?;
 
     // Start updates (best-effort)
-    let _ = p.call_method::<(), _>("ClaimAccelerometer", &());
+    let _ = p.call_method("ClaimAccelerometer", &());
 
     // Map tilt classes -> monotonic “angle-ish” signal
     let tilt: String = p.get_property("AccelerometerTilt").ok()?;
@@ -499,7 +499,7 @@ fn query_proxy_lux() -> Option<f32> {
     .ok()?;
 
     // Start updates (best-effort)
-    let _ = p.call_method::<(), _>("ClaimLight", &());
+    let _ = p.call_method("ClaimLight", &());
 
     let lux: f64 = p.get_property("LightLevel").ok()?;
     Some(lux as f32)
