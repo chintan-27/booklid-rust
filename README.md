@@ -1,50 +1,80 @@
 # booklid-rust
 
-Simple API for reading your laptop lid angle (degrees) with async or blocking apps.
-Works on modern MacBooks (2019+) via HID; ALS provides a fallback “bellows” control (0..1).
-Windows/Linux backends are planned.
+Simple, **stable** API for reading your laptop lid angle (degrees) with async or blocking apps.
+
+Supports **macOS, Windows, and Linux** with automatic backend discovery, confidence gating, and reconnects.  
+Ambient Light Sensor (ALS) is used as a safe fallback and publishes a normalized control (0..1) when a true hinge angle is unavailable.
+
+> **Distribution:** This crate is currently distributed via **GitHub releases** (not crates.io).
+
+---
 
 ## Why use this
 
 * One call to open a device → read `latest()` or `subscribe()` to a stream.
 * Works in async **and** non-async programs (`open` and `open_blocking`).
-* Confidence-gated output (≥ **0.70** to “go live”, drops < **0.65**), with auto-reconnect.
-* Quiet by default; optional diagnostics (env or feature).
-* Discovery finds the right HID report on more Mac models; **ALS** is a safe fallback.
+* Confidence-gated output (configurable; default ≥ **0.70** to “go live”, drops with hysteresis).
+* Until confidence passes the threshold, `latest()` returns `None`.
+* Automatic reconnect with backoff.
+* Quiet by default; optional diagnostics (config or env).
+* Backend discovery and fallback are automatic and configurable.
 * Mock backend is **opt-in** for testing; **never** used by default.
-
-## Device support
-
-* **macOS:** Hinge angle via HID Feature (2019+).
-  Fallback: **ALS** publishes a normalized control (0..1), **not** degrees.
-* **Windows / Linux:** planned (sensor chains sketched; stubs coming next).
+* **Stable 1.x API** (no breaking changes without a major version bump).
 
 ---
 
-## Install
+## Device support
 
-> Requires `cargo-edit`: `cargo install cargo-edit`
+* **macOS (stable):**
+  * Hinge angle via HID Feature (2019+ MacBooks).
+  * Fallback: **ALS** publishes a normalized control (0..1), **not** degrees.
+* **Windows (stable):**
+  * WinRT sensors probe chain: **Hinge → Tilt → ALS**.
+* **Linux (stable):**
+  * **iio-sensor-proxy (DBus)** for tilt classification + light level.
+  * Fallback: **IIO `/sys`** accelerometer / light channels when available.
+  * ALS-style fallbacks publish normalized values when degrees are unavailable.
 
-**GitHub dependency (tagged):**
+> **Note:** Some Linux devices expose **tilt classes** rather than a true hinge angle.  
+> In those cases the value is monotonic but not a physical hinge degree.
+
+---
+
+## Install (GitHub)
+
+Add the dependency directly from GitHub:
 
 ```bash
-cargo add booklid-rust --git https://github.com/chintan-27/booklid-rust --tag v0.5.0
-```
+cargo add booklid-rust --git https://github.com/chintan-27/booklid-rust
+````
 
-**Optional features:**
+### Optional features
 
 ```bash
-# Diagnostics logging (env also supported; see below)
-cargo add booklid-rust --git https://github.com/chintan-27/booklid-rust --tag v0.5.0 --features diagnostics
+# macOS HID report discovery
+cargo add booklid-rust --git https://github.com/chintan-27/booklid-rust --features mac_hid_discovery
 
-# Mac HID discovery (auto-pick Feature Report ID)
-cargo add booklid-rust --git https://github.com/chintan-27/booklid-rust --tag v0.5.0 --features mac_hid_discovery
+# macOS ALS fallback
+cargo add booklid-rust --git https://github.com/chintan-27/booklid-rust --features mac_als
 
-# Mac ALS fallback (normalized 0..1 control)
-cargo add booklid-rust --git https://github.com/chintan-27/booklid-rust --tag v0.5.0 --features mac_als
+# Windows sensors backend
+cargo add booklid-rust --git https://github.com/chintan-27/booklid-rust --features win_sensors
+
+# Linux DBus proxy backend
+cargo add booklid-rust --git https://github.com/chintan-27/booklid-rust --features linux_iio_proxy
+
+# Linux /sys IIO backend
+cargo add booklid-rust --git https://github.com/chintan-27/booklid-rust --features linux_iio_sys
 
 # Mock backend (testing only)
-cargo add booklid-rust --git https://github.com/chintan-27/booklid-rust --tag v0.5.0 --features mock
+cargo add booklid-rust --git https://github.com/chintan-27/booklid-rust --features mock
+```
+
+Alternatively, in `Cargo.toml`:
+
+```toml
+[dependencies]
+booklid-rust = { git = "https://github.com/chintan-27/booklid-rust", features = ["win_sensors"] }
 ```
 
 ---
@@ -68,6 +98,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+---
+
 ## Quickstart (blocking)
 
 ```rust
@@ -86,7 +118,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-> **Note:** `open_blocking*` creates/uses a global multithreaded Tokio runtime; avoid calling from async contexts.
+> **Note:** `open_blocking*` creates/uses a global multithreaded Tokio runtime.
+> Avoid calling it from async contexts.
 
 ---
 
@@ -102,12 +135,7 @@ async fn main() -> booklid_rust::Result<()> {
     let mut stream = dev.subscribe();
     println!("source={:?}", dev.info().source);
     while let Some(s) = stream.next().await {
-        match s.source {
-            booklid_rust::Source::ALS => {
-                println!("bellows: {:.2}  [{:?}]", s.angle_deg, s.source);
-            }
-            _ => println!("{:6.2}°  [{:?}]", s.angle_deg, s.source),
-        }
+        println!("{:6.2}  [{:?}]", s.angle_deg, s.source);
     }
     Ok(())
 }
@@ -115,75 +143,103 @@ async fn main() -> booklid_rust::Result<()> {
 
 ---
 
-## Options (allow mock, toggle discovery, set smoothing)
+## Configuration (OpenConfig)
+
+`OpenConfig` is the **stable configuration API** in 1.0.
 
 ```rust
-use booklid_rust::{open_with, OpenOptions, AngleDevice};
+use booklid_rust::{open_with_config, OpenConfig, AngleDevice};
 
 #[tokio::main]
 async fn main() -> booklid_rust::Result<()> {
-    let opts = OpenOptions::new(60.0)
-        .smoothing(0.3)   // EMA alpha in [0,1]
-        .discovery(true)  // HID report ID discovery (mac)
-        .allow_mock(true);// testing only; requires --features mock
+    let cfg = OpenConfig::new(60.0)
+        .smoothing(0.3)
+        .min_confidence(0.70)
+        .prefer(vec![booklid_rust::Source::HingeFeature])
+        .disable(vec![booklid_rust::Source::ALS])
+        .diagnostics(true);
 
-    let dev = open_with(opts).await?;
+    let dev = open_with_config(cfg).await?;
     println!("source={:?} conf={:.2}", dev.info().source, dev.confidence());
     Ok(())
 }
 ```
 
+### What you can configure
+
+* `hz` — sampling frequency (> 0)
+* `smoothing_alpha` — EMA alpha [0,1]
+* `min_confidence` — go-live threshold (drop uses hysteresis)
+* `prefer_sources` / `disable_backends`
+* `discovery` — backend discovery (macOS HID)
+* `allow_mock` — testing only
+* `diagnostics` — one-line init report
+* `fail_after` — overall open timeout
+* `persistence` — remember last successful backend
+
 ---
 
-## Features
+## Persistence
 
-* `default = ["mac_hid_feature"]`
-* `mac_hid_discovery` — probe Feature Report IDs 1..8 at startup
-* `mac_als` — Ambient Light fallback; publishes 0..1 control signal
-* `mock` — **opt-in**; never used unless `allow_mock(true)` is set
-* `diagnostics` — opt-in logging (you can also use the env var below)
+By default, booklid remembers the last successful backend and tries it first on the next startup.
+
+Clear persisted state:
+
+```rust
+booklid_rust::clear_persisted_state()?;
+```
 
 ---
 
 ## Env toggles
 
-* `BOOKLID_DESKTOP=1` — **force desktop guard** (skip hinge; go ALS). Handy for testing ALS on any machine.
-* `BOOKLID_DIAGNOSTICS=1` — print a one-line summary when a backend opens:
-
-  ```
-  booklid: chosen=ALS tried=[HingeFeature,HingeHid,ALS] guard=false min=0.70 drop=0.65 hz=60.0 smoothing=0.25
-  ```
+* `BOOKLID_DESKTOP=1` — force desktop guard (skip hinge; allow ALS).
+* `BOOKLID_DIAGNOSTICS=1` — enable diagnostics line.
 * `BOOKLID_CI=1` — examples exit after a short run (used in CI).
 
 ---
 
 ## Examples
 
-* Async watch:
-  `cargo run --example watch`
-* Blocking watch:
-  `cargo run --example watch_blocking`
-* Subscribe:
-  `cargo run --example subscribe`
-* ALS fallback (force desktop guard):
-  `BOOKLID_DESKTOP=1 cargo run --example watch --no-default-features --features mac_als`
-* Discovery w/ diagnostics:
-  `BOOKLID_DIAGNOSTICS=1 cargo run --example watch --features mac_hid_discovery`
-* Mock (testing only):
-  `cargo run --example mock_watch --no-default-features --features mock`
+```bash
+# Async watch
+cargo run --example watch
+
+# Blocking watch
+cargo run --example watch_blocking
+
+# Subscribe
+cargo run --example subscribe
+
+# Linux ALS / proxy testing
+BOOKLID_DESKTOP=1 cargo run --example watch --no-default-features --features linux_iio_proxy
+
+# Mock (testing only)
+cargo run --example mock_watch --no-default-features --features mock
+```
 
 ---
 
 ## Troubleshooting
 
-* **macOS HID build issues** → install Xcode CLT:
-  `xcode-select --install`
-* **Code gray in editor (“inactive due to #[cfg]”)** → build with the needed feature, e.g.:
-  `cargo run --example watch --features mac_hid_discovery`
-* **“no backend enabled”** → you built with `--no-default-features`; enable a platform feature or use `mock` for testing.
+* **macOS HID build issues**
+
+  ```bash
+  xcode-select --install
+  ```
+
+* **Linux permissions**
+  Ensure access to `/sys/bus/iio` (udev rules may be required).
+
+* **“no backend enabled”**
+  Enable a platform feature or use `mock` for testing.
 
 ---
 
 ## License
 
-[MIT]() or [Apache-2.0]().
+MIT
+
+```
+
+---
