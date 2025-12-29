@@ -27,12 +27,12 @@ pub struct WinAngle {
 
 impl WinAngle {
     pub async fn open_hinge(hz: f32) -> Result<Self> {
-        // windows-rs 0.58: GetDefault is not available, but GetDefaultAsync is.
-        let op = HingeAngleSensor::IHingeAngleSensorStatics(|s| s.GetDefaultAsync())
-            .map_err(|e| Error::Backend(format!("win hinge: {e:?}")))?;
-        let sensor = op
+        // Prefer inherent method if present in this binding set
+        let sensor = HingeAngleSensor::GetDefaultAsync()
+            .map_err(|e| Error::Backend(format!("win hinge: {e:?}")))?
             .await
             .map_err(|e| Error::Backend(format!("win hinge: {e:?}")))?;
+
         Self::spawn_from_hinge(sensor, hz).await
     }
 

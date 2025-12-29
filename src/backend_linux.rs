@@ -486,7 +486,7 @@ fn query_proxy_lux() -> Option<f32> {
     Some(lux as f32)
 }
 
-fn first_existing(base: &PathBuf, names: &[&str]) -> Option<PathBuf> {
+fn first_existing(base: &Path, names: &[&str]) -> Option<PathBuf> {
     for n in names {
         let p = base.join(n);
         if p.exists() {
