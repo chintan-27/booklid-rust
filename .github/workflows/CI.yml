@@ -14,29 +14,29 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
-clippy:
-  strategy:
-    fail-fast: false
-    matrix:
-      include:
-        - os: macos-latest
-          name: macos-default
-          cmd: cargo clippy --all-targets -- -D warnings
-        - os: ubuntu-latest
-          name: linux-iio-sys
-          cmd: cargo clippy --no-default-features --features linux_iio_sys --all-targets -- -D warnings
-        - os: windows-latest
-          name: windows-sensors
-          cmd: cargo clippy --no-default-features --features win_sensors --all-targets -- -D warnings
+  clippy:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: macos-default
+            cmd: cargo clippy --all-targets -- -D warnings
+          - os: ubuntu-latest
+            name: linux-iio-sys
+            cmd: cargo clippy --no-default-features --features linux_iio_sys --all-targets -- -D warnings
+          - os: windows-latest
+            name: windows-sensors
+            cmd: cargo clippy --no-default-features --features win_sensors --all-targets -- -D warnings
 
-  runs-on: ${{ matrix.os }}
-  steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-      with:
-        components: clippy
-    - uses: Swatinem/rust-cache@v2
-    - run: ${{ matrix.cmd }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: ${{ matrix.cmd }}
 
   build-and-test:
     strategy:
@@ -51,13 +51,11 @@ clippy:
             name: windows-sensors
 
     runs-on: ${{ matrix.os }}
-
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # --- macOS: default features (mac_hid_feature) ---
       - name: cargo check (macOS default)
         if: matrix.name == 'macos-default'
         run: cargo check --all-targets
@@ -70,7 +68,6 @@ clippy:
         if: matrix.name == 'macos-default'
         run: cargo test
 
-      # --- Linux: build linux backends + deterministic smoke with mock ---
       - name: cargo check (linux backends)
         if: matrix.name == 'linux-iio'
         run: |
@@ -81,7 +78,6 @@ clippy:
         if: matrix.name == 'linux-iio'
         run: cargo test --no-default-features --features mock
 
-      # --- Windows: build windows sensors + deterministic smoke with mock ---
       - name: cargo check (windows sensors)
         if: matrix.name == 'windows-sensors'
         run: cargo check --no-default-features --features win_sensors --all-targets
