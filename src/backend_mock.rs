@@ -18,7 +18,7 @@ pub struct MockAngle {
 }
 
 impl MockAngle {
-    pub async fn open(hz: f32) -> anyhow::Result<Self> {
+    pub async fn open(hz: f32) -> crate::Result<Self> {
         let latest = Arc::new(Mutex::new(None));
         let (tx, _rx) = broadcast::channel::<AngleSample>(256);
         let alpha = Arc::new(Mutex::new(0.25));

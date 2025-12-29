@@ -23,7 +23,7 @@ impl HidAngle {
     }
 
     // NEW: allow caller to toggle discovery.
-    pub async fn open_with(hz: f32, discovery: bool) -> Result<Self> {
+    pub async fn open_with(hz: f32, _discovery: bool) -> Result<Self> {
         let latest = Arc::new(Mutex::new(None));
         let (tx, _rx) = broadcast::channel::<AngleSample>(256);
         let alpha: Arc<Mutex<f32>> = Arc::new(Mutex::new(0.25f32));

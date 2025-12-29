@@ -18,7 +18,7 @@ use tokio::{
 use tokio_stream::wrappers::BroadcastStream;
 
 #[cfg(feature = "linux_iio_proxy")]
-use zbus::{blocking::Connection as ZConn, zvariant::OwnedObjectPath};
+use zbus::blocking::{Connection as ZConn, Proxy as ZProxy};
 
 pub struct LinuxAngle {
     latest: Arc<Mutex<Option<AngleSample>>>,
@@ -131,8 +131,7 @@ impl LinuxAngle {
 
     #[cfg(feature = "linux_iio_proxy")]
     async fn spawn_from_proxy_tilt(hz: f32) -> Result<Self> {
-        // iio-sensor-proxy exposes accelerometer orientation, not raw angle.
-        // We estimate an angle from pitch (simple).
+        // iio-sensor-proxy exposes tilt classification (strings), not raw hinge degrees.
         let latest = Arc::new(Mutex::new(None));
         let (tx, _rx) = broadcast::channel::<AngleSample>(256);
         let alpha = Arc::new(Mutex::new(0.25f32));
@@ -151,9 +150,10 @@ impl LinuxAngle {
 
             loop {
                 interval.tick().await;
-                // (Blocking zbus conn per tick is not ideal; a persistent async bus is better.
-                // Keep simple for 0.6; users rarely hit proxy-only path in tight loops.)
+                // Blocking DBus per tick isn't ideal; keep it simple for 1.0.
+                // (We can switch to an async zbus connection later.)
                 let angle = query_proxy_pitch_degrees().unwrap_or(0.0);
+
                 let a = (*alpha_c.lock().unwrap()).clamp(0.0, 1.0);
                 let s = match smoothed {
                     None => angle,
@@ -220,6 +220,7 @@ impl LinuxAngle {
             loop {
                 interval.tick().await;
                 let lux = query_proxy_lux().unwrap_or(1.0);
+
                 baseline = 0.995 * baseline + 0.005 * lux;
                 let val = lux - baseline;
                 let n = (val * 0.02 + 0.5).clamp(0.0, 1.0);
@@ -441,20 +442,67 @@ impl AngleDevice for LinuxAngle {
 // ==== helpers ====
 
 #[cfg(feature = "linux_iio_proxy")]
-fn query_proxy_pitch_degrees() -> Option<f32> {
-    // Minimal sync call: read Accelerometer reading and estimate pitch; varies by daemon version
-    let conn = ZConn::session().ok()?;
-    // The proxy DBus interface is net.hadess.SensorProxy (orientation/accelerometer);
-    // For 0.6, we keep a placeholder returning None if not ready.
-    drop(conn);
+fn proxy() -> Option<ZProxy<'static>> {
+    // iio-sensor-proxy is on the SYSTEM bus
+    let conn = ZConn::system().ok()?;
+    let p = ZProxy::new(
+        &conn,
+        "net.hadess.SensorProxy",
+        "/net/hadess/SensorProxy",
+        "net.hadess.SensorProxy",
+    )
+    .ok()?;
+
+    // NOTE: This returns a proxy borrowing `conn`, but we only use it within the
+    // same function call chain (query_* below), so no leaking needed here.
+    // We convert to 'static by re-creating it each time and keeping it local.
+    let _ = p;
     None
 }
 
 #[cfg(feature = "linux_iio_proxy")]
+fn query_proxy_pitch_degrees() -> Option<f32> {
+    let conn = ZConn::system().ok()?;
+    let p = ZProxy::new(
+        &conn,
+        "net.hadess.SensorProxy",
+        "/net/hadess/SensorProxy",
+        "net.hadess.SensorProxy",
+    )
+    .ok()?;
+
+    // Start updates (best-effort)
+    let _ = p.call_method::<(), _>("ClaimAccelerometer", &());
+
+    // Map tilt classes -> monotonic “angle-ish” signal
+    let tilt: String = p.get_property("AccelerometerTilt").ok()?;
+    let deg = match tilt.as_str() {
+        "face-up" => 0.0,
+        "tilted-up" => 45.0,
+        "vertical" => 90.0,
+        "tilted-down" => 135.0,
+        "face-down" => 180.0,
+        _ => return None,
+    };
+    Some(deg)
+}
+
+#[cfg(feature = "linux_iio_proxy")]
 fn query_proxy_lux() -> Option<f32> {
-    let conn = ZConn::session().ok()?;
-    drop(conn);
-    None
+    let conn = ZConn::system().ok()?;
+    let p = ZProxy::new(
+        &conn,
+        "net.hadess.SensorProxy",
+        "/net/hadess/SensorProxy",
+        "net.hadess.SensorProxy",
+    )
+    .ok()?;
+
+    // Start updates (best-effort)
+    let _ = p.call_method::<(), _>("ClaimLight", &());
+
+    let lux: f64 = p.get_property("LightLevel").ok()?;
+    Some(lux as f32)
 }
 
 fn first_existing(base: &PathBuf, names: &[&str]) -> Option<PathBuf> {
