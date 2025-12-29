@@ -2,28 +2,29 @@
 
 #[cfg(feature = "mac_hid_feature")]
 mod backend_hidapi;
-
-#[cfg(feature = "mac_als")]
-mod backend_mac_als;
-
-#[cfg(feature = "mock")]
-mod backend_mock;
-
-#[cfg(all(target_os = "windows", feature = "win_sensors"))]
-mod backend_win;
-
 #[cfg(all(
     target_os = "linux",
     any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
 ))]
 mod backend_linux;
+#[cfg(feature = "mac_als")]
+mod backend_mac_als;
+#[cfg(feature = "mock")]
+mod backend_mock;
+#[cfg(all(target_os = "windows", feature = "win_sensors"))]
+mod backend_win;
+
+mod persist;
 
 pub mod types;
 pub use crate::types::{AngleSample, Error, Result, Source};
 
 use futures_util::stream::BoxStream;
 use once_cell::sync::Lazy;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+pub type AngleStream = BoxStream<'static, AngleSample>;
+pub type AngleClient = Box<dyn AngleDevice + Send + Sync>;
 
 const HAS_BACKENDS: bool = cfg!(any(
     feature = "mac_hid_feature",
@@ -36,15 +37,11 @@ const HAS_BACKENDS: bool = cfg!(any(
     )
 ));
 
-pub type AngleStream = BoxStream<'static, AngleSample>;
-pub type AngleClient = Box<dyn AngleDevice + Send + Sync>;
-
 // ===== Device info =====
 
 #[derive(Clone, Debug)]
 pub struct DeviceInfo {
-    pub source: crate::Source,
-    /// Short backend note like "mac_hid_feature", "mac_als", or "mock".
+    pub source: Source,
     pub note: &'static str,
 }
 
@@ -53,9 +50,7 @@ pub struct DeviceInfo {
 pub trait AngleDevice: Send + Sync {
     fn latest(&self) -> Option<AngleSample>;
     fn subscribe(&self) -> AngleStream;
-    /// Exponential smoothing alpha in [0.0, 1.0]
     fn set_smoothing(&self, alpha: f32);
-    /// Confidence in [0.0, 1.0]
     fn confidence(&self) -> f32;
     fn info(&self) -> DeviceInfo;
 }
@@ -69,95 +64,139 @@ static RUNTIME: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
         .expect("failed to init Tokio runtime")
 });
 
-/// Blocking open functions below create/use a global multithreaded Tokio runtime.
-/// Avoid calling them from async contexts.
-
-// ===== Open options =====
+// ===== OpenConfig (1.0) =====
 
 #[derive(Clone, Debug)]
-pub struct OpenOptions {
+pub struct OpenConfig {
     pub hz: f32,
-    pub smoothing_init: f32,
-    pub allow_mock: bool,
-    /// Reserved for future use (per-backend timeouts / fail_after).
-    pub timeout: Duration,
-    /// macOS-specific: whether to attempt HID "discovery" mode.
+    pub smoothing_alpha: f32,
+    pub min_confidence: f32,
+    pub prefer_sources: Vec<Source>,
+    pub disable_backends: Vec<Source>,
     pub discovery: bool,
+    pub allow_mock: bool,
+    pub diagnostics: bool,
+    pub fail_after: Duration,
+    pub persistence: bool,
 }
 
-impl OpenOptions {
+impl OpenConfig {
     pub fn new(hz: f32) -> Self {
         Self {
             hz,
-            smoothing_init: 0.25,
-            allow_mock: false,
-            timeout: Duration::from_secs(3),
+            smoothing_alpha: 0.25,
+            min_confidence: 0.70,
+            prefer_sources: vec![],
+            disable_backends: vec![],
             discovery: true,
+            allow_mock: false,
+            diagnostics: false,
+            fail_after: Duration::from_secs(3),
+            persistence: true,
         }
     }
-    pub fn smoothing(mut self, alpha: f32) -> Self {
-        self.smoothing_init = alpha;
+
+    pub fn smoothing(mut self, a: f32) -> Self {
+        self.smoothing_alpha = a;
         self
     }
-    pub fn allow_mock(mut self, ok: bool) -> Self {
-        self.allow_mock = ok;
+    pub fn min_confidence(mut self, m: f32) -> Self {
+        self.min_confidence = m;
+        self
+    }
+    pub fn prefer(mut self, v: Vec<Source>) -> Self {
+        self.prefer_sources = v;
+        self
+    }
+    pub fn disable(mut self, v: Vec<Source>) -> Self {
+        self.disable_backends = v;
         self
     }
     pub fn discovery(mut self, on: bool) -> Self {
         self.discovery = on;
         self
     }
-}
+    pub fn allow_mock(mut self, ok: bool) -> Self {
+        self.allow_mock = ok;
+        self
+    }
+    pub fn diagnostics(mut self, on: bool) -> Self {
+        self.diagnostics = on;
+        self
+    }
+    pub fn fail_after(mut self, d: Duration) -> Self {
+        self.fail_after = d;
+        self
+    }
+    pub fn persistence(mut self, on: bool) -> Self {
+        self.persistence = on;
+        self
+    }
 
-// ===== Internal init config & report =====
-
-pub struct InitConfig {
-    pub hz: f32,
-    pub smoothing_init: f32,
-    pub allow_mock: bool,
-    pub timeout: Duration,
-    pub discovery: bool,
-}
-impl InitConfig {
-    pub fn new(hz: f32) -> Self {
-        Self {
-            hz,
-            smoothing_init: 0.25,
-            allow_mock: false,
-            timeout: Duration::from_secs(3),
-            discovery: true,
+    pub fn validate(mut self) -> Result<Self> {
+        if self.hz <= 0.0 {
+            return Err(Error::Other("hz must be > 0".into()));
         }
+        self.smoothing_alpha = self.smoothing_alpha.clamp(0.0, 1.0);
+        self.min_confidence = self.min_confidence.clamp(0.0, 1.0);
+        if self
+            .prefer_sources
+            .iter()
+            .any(|s| self.disable_backends.contains(s))
+        {
+            return Err(Error::Other(
+                "prefer_sources intersects disable_backends".into(),
+            ));
+        }
+        Ok(self)
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct SetupReport {
-    pub chosen: Option<Source>,
-    pub tried: Vec<Source>,
-    pub desktop_guard: bool,
-    pub used_mock: bool,
-    pub duration: Duration,
+// ===== Internal init config =====
+
+struct InitConfig {
+    hz: f32,
+    smoothing_alpha: f32,
+    min_confidence: f32,
+    prefer_sources: Vec<Source>,
+    disable_backends: Vec<Source>,
+
+    #[cfg_attr(not(feature = "mac_hid_feature"), allow(dead_code))]
+    discovery: bool,
+
+    #[cfg_attr(not(feature = "mock"), allow(dead_code))]
+    allow_mock: bool,
+
+    diagnostics: bool,
+    persistence: bool,
+}
+
+impl InitConfig {
+    fn from_open(cfg: OpenConfig) -> Result<Self> {
+        let cfg = cfg.validate()?;
+        Ok(Self {
+            hz: cfg.hz,
+            smoothing_alpha: cfg.smoothing_alpha,
+            min_confidence: cfg.min_confidence,
+            prefer_sources: cfg.prefer_sources,
+            disable_backends: cfg.disable_backends,
+            discovery: cfg.discovery,
+            allow_mock: cfg.allow_mock && cfg!(feature = "mock"),
+            diagnostics: cfg.diagnostics
+                || std::env::var("BOOKLID_DIAGNOSTICS").ok().as_deref() == Some("1"),
+            persistence: cfg.persistence,
+        })
+    }
 }
 
 // ===== Desktop guard =====
 
 fn desktop_guard() -> bool {
-    // Simple env-driven guard for now; replace with a chassis/model check later.
     std::env::var("BOOKLID_DESKTOP").ok().as_deref() == Some("1")
 }
 
-// ===== Confidence gate wrapper (only used when any backend feature is enabled) =====
+// ===== Confidence gate =====
 
-#[cfg(any(
-    feature = "mac_hid_feature",
-    feature = "mac_als",
-    feature = "mock",
-    all(target_os = "windows", feature = "win_sensors"),
-    all(
-        target_os = "linux",
-        any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
-    )
-))]
 mod gating {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -170,7 +209,8 @@ mod gating {
     }
 
     impl Gated {
-        pub fn wrap(inner: AngleClient, min: f32, drop: f32) -> AngleClient {
+        pub fn wrap(inner: AngleClient, min: f32) -> AngleClient {
+            let drop = (min - 0.05).clamp(0.0, 1.0);
             Box::new(Self {
                 inner,
                 live: AtomicBool::new(false),
@@ -179,7 +219,6 @@ mod gating {
             })
         }
 
-        #[inline]
         fn bump(&self) {
             let c = self.inner.confidence();
             let live = self.live.load(Ordering::Relaxed);
@@ -200,325 +239,143 @@ mod gating {
                 None
             }
         }
-
-        // Keep the stream pass-through; most UIs use latest() to decide "waiting..."
         fn subscribe(&self) -> AngleStream {
             self.inner.subscribe()
         }
-
-        fn set_smoothing(&self, alpha: f32) {
-            self.inner.set_smoothing(alpha)
+        fn set_smoothing(&self, a: f32) {
+            self.inner.set_smoothing(a)
         }
-
         fn confidence(&self) -> f32 {
             self.inner.confidence()
         }
-
         fn info(&self) -> DeviceInfo {
             self.inner.info()
         }
     }
 }
 
-#[cfg(any(
-    feature = "mac_hid_feature",
-    feature = "mac_als",
-    feature = "mock",
-    all(target_os = "windows", feature = "win_sensors"),
-    all(
-        target_os = "linux",
-        any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
-    )
-))]
 use gating::Gated;
 
-// ===== Unified init (mac-first today) =====
+// ===== Unified init =====
 
-pub async fn init(cfg: InitConfig) -> Result<(AngleClient, SetupReport)> {
+async fn init_all(cfg: InitConfig) -> Result<AngleClient> {
     if !HAS_BACKENDS {
         return Err(Error::Backend(
-            "no backends enabled; enable one of: mac_hid_feature, mac_als, mock, win_sensors, linux_iio_proxy, linux_iio_sys".into()
+            "no backends enabled; enable platform features".into(),
         ));
     }
-    let t0 = Instant::now();
-    #[allow(unused_mut)]
-    let mut tried: Vec<Source> = Vec::new();
-    let guard = desktop_guard();
 
-    // Desktop → skip hinge entirely and go straight to ALS.
-    if guard {
-        #[cfg(feature = "mac_als")]
-        {
-            tried.push(Source::ALS);
-            if let Ok(dev) = backend_mac_als::AlsAngle::open(cfg.hz).await {
-                let dev: AngleClient = Box::new(dev);
-                dev.set_smoothing(cfg.smoothing_init);
-                // Confidence gating
-                let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
-                let report = SetupReport {
-                    chosen: Some(Source::ALS),
-                    tried,
-                    desktop_guard: guard,
-                    used_mock: false,
-                    duration: t0.elapsed(),
-                };
-                if std::env::var("BOOKLID_DIAGNOSTICS").ok().as_deref() == Some("1") {
-                    eprintln!(
-                        "booklid: chosen={:?} tried={:?} guard={} min=0.70 drop=0.65 hz={:.1} smoothing={:.2}",
-                        report.chosen,
-                        report.tried,
-                        report.desktop_guard,
-                        cfg.hz,
-                        cfg.smoothing_init
-                    );
-                }
-                return Ok((dev, report));
-            }
-        }
-        // LINUX ALS (when linux_iio_* features are enabled)
-        #[cfg(all(
-            target_os = "linux",
-            any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
-        ))]
-        {
-            tried.push(Source::LinuxALS);
-            if let Ok(dev) = backend_linux::LinuxAngle::open_als(cfg.hz).await {
-                let dev: AngleClient = Box::new(dev);
-                dev.set_smoothing(cfg.smoothing_init);
-                let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
-                let report = SetupReport {
-                    chosen: Some(Source::LinuxALS),
-                    tried,
-                    desktop_guard: guard,
-                    used_mock: false,
-                    duration: t0.elapsed(),
-                };
-                return Ok((dev, report));
-            }
-        }
+    let mut tried = Vec::new();
 
-        let msg = if cfg!(all(
-            target_os = "linux",
-            any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
-        )) && !std::path::Path::new("/sys/bus/iio/devices").exists()
-        {
-            format!("no IIO subsystem found at /sys/bus/iio/devices; tried: {tried:?}")
-        } else {
-            format!("no suitable backend available; tried: {tried:?}")
+    // Persistence: try last source first
+    let persisted = if cfg.persistence {
+        persist::load().last_source
+    } else {
+        None
+    };
+
+    let mut order: Vec<Source> = vec![
+        Source::HingeFeature,
+        Source::HingeHid,
+        Source::ALS,
+        Source::WinHinge,
+        Source::WinTilt,
+        Source::WinALS,
+        Source::LinuxTilt,
+        Source::LinuxALS,
+        Source::Mock,
+    ];
+
+    order.retain(|s| !cfg.disable_backends.contains(s));
+    if let Some(p) = persisted {
+        if order.contains(&p) {
+            order.retain(|s| s != &p);
+            order.insert(0, p);
+        }
+    }
+    for p in cfg.prefer_sources.iter().rev() {
+        if order.contains(p) {
+            order.retain(|s| s != p);
+            order.insert(0, *p);
+        }
+    }
+
+    let _guard = desktop_guard();
+
+    for src in order {
+        tried.push(src);
+        let dev = match src {
+            #[cfg(feature = "mac_hid_feature")]
+            Source::HingeFeature if !_guard => backend_hidapi::HidAngle::open(cfg.hz).await.ok(),
+            #[cfg(feature = "mac_hid_feature")]
+            Source::HingeHid if !_guard => {
+                backend_hidapi::HidAngle::open_with(cfg.hz, cfg.discovery)
+                    .await
+                    .ok()
+            }
+            #[cfg(feature = "mac_als")]
+            Source::ALS => backend_mac_als::AlsAngle::open(cfg.hz).await.ok(),
+            #[cfg(all(target_os = "windows", feature = "win_sensors"))]
+            Source::WinHinge => backend_win::WinAngle::open_hinge(cfg.hz).await.ok(),
+            #[cfg(all(target_os = "windows", feature = "win_sensors"))]
+            Source::WinTilt => backend_win::WinAngle::open_tilt(cfg.hz).await.ok(),
+            #[cfg(all(target_os = "windows", feature = "win_sensors"))]
+            Source::WinALS => backend_win::WinAngle::open_als(cfg.hz).await.ok(),
+            #[cfg(all(
+                target_os = "linux",
+                any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
+            ))]
+            Source::LinuxTilt => backend_linux::LinuxAngle::open_tilt(cfg.hz).await.ok(),
+            #[cfg(all(
+                target_os = "linux",
+                any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
+            ))]
+            Source::LinuxALS => backend_linux::LinuxAngle::open_als(cfg.hz).await.ok(),
+            #[cfg(feature = "mock")]
+            Source::Mock if cfg.allow_mock => backend_mock::MockAngle::open(cfg.hz).await.ok(),
+            _ => None,
         };
-        return Err(Error::Backend(msg));
-    }
 
-    // Laptop path: Hinge Feature first
-    #[cfg(feature = "mac_hid_feature")]
-    {
-        tried.push(Source::HingeFeature);
-        if let Ok(dev) = backend_hidapi::HidAngle::open(cfg.hz).await {
+        if let Some(dev) = dev {
             let dev: AngleClient = Box::new(dev);
-            dev.set_smoothing(cfg.smoothing_init);
-            let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
-            let report = SetupReport {
-                chosen: Some(Source::HingeFeature),
-                tried,
-                desktop_guard: guard,
-                used_mock: false,
-                duration: t0.elapsed(),
-            };
-            return Ok((dev, report));
+            dev.set_smoothing(cfg.smoothing_alpha);
+            let dev = Gated::wrap(dev, cfg.min_confidence);
+            if cfg.persistence {
+                persist::store(&persist::PersistedState {
+                    last_source: Some(src),
+                })
+                .ok();
+            }
+            if cfg.diagnostics {
+                eprintln!("booklid: chosen={:?} tried={:?}", src, tried);
+            }
+            return Ok(dev);
         }
     }
 
-    // Then Hinge "discovery" path (tag distinctly as HingeHid)
-    #[cfg(feature = "mac_hid_feature")]
-    {
-        tried.push(Source::HingeHid);
-        if let Ok(dev) = backend_hidapi::HidAngle::open_with(cfg.hz, cfg.discovery).await {
-            let dev: AngleClient = Box::new(dev);
-            dev.set_smoothing(cfg.smoothing_init);
-            let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
-            let report = SetupReport {
-                chosen: Some(Source::HingeHid),
-                tried,
-                desktop_guard: guard,
-                used_mock: false,
-                duration: t0.elapsed(),
-            };
-            return Ok((dev, report));
-        }
-    }
-
-    // Fallback: ALS (e.g., desktop-like behavior or hinge unavailable)
-    #[cfg(feature = "mac_als")]
-    {
-        tried.push(Source::ALS);
-        if let Ok(dev) = backend_mac_als::AlsAngle::open(cfg.hz).await {
-            let dev: AngleClient = Box::new(dev);
-            dev.set_smoothing(cfg.smoothing_init);
-            let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
-            let report = SetupReport {
-                chosen: Some(Source::ALS),
-                tried,
-                desktop_guard: guard,
-                used_mock: false,
-                duration: t0.elapsed(),
-            };
-            return Ok((dev, report));
-        }
-    }
-
-    // Optional mock (strictly opt-in)
-    #[cfg(feature = "mock")]
-    if cfg.allow_mock {
-        tried.push(Source::Mock);
-        if let Ok(dev) = backend_mock::MockAngle::open(cfg.hz).await {
-            let dev: AngleClient = Box::new(dev);
-            dev.set_smoothing(cfg.smoothing_init);
-            let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
-            let report = SetupReport {
-                chosen: Some(Source::Mock),
-                tried,
-                desktop_guard: guard,
-                used_mock: true,
-                duration: t0.elapsed(),
-            };
-            return Ok((dev, report));
-        }
-    }
-
-    // Windows sensors chain
-    #[cfg(all(target_os = "windows", feature = "win_sensors"))]
-    {
-        // Prefer hinge, then tilt, then ALS
-        tried.push(Source::WinHinge);
-        if let Ok(dev) = backend_win::WinAngle::open_hinge(cfg.hz).await {
-            let dev: AngleClient = Box::new(dev);
-            dev.set_smoothing(cfg.smoothing_init);
-            let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
-            let report = SetupReport {
-                chosen: Some(Source::WinHinge),
-                tried,
-                desktop_guard: guard,
-                used_mock: false,
-                duration: t0.elapsed(),
-            };
-            return Ok((dev, report));
-        }
-
-        tried.push(Source::WinTilt);
-        if let Ok(dev) = backend_win::WinAngle::open_tilt(cfg.hz).await {
-            let dev: AngleClient = Box::new(dev);
-            dev.set_smoothing(cfg.smoothing_init);
-            let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
-            let report = SetupReport {
-                chosen: Some(Source::WinTilt),
-                tried,
-                desktop_guard: guard,
-                used_mock: false,
-                duration: t0.elapsed(),
-            };
-            return Ok((dev, report));
-        }
-
-        tried.push(Source::WinALS);
-        if let Ok(dev) = backend_win::WinAngle::open_als(cfg.hz).await {
-            let dev: AngleClient = Box::new(dev);
-            dev.set_smoothing(cfg.smoothing_init);
-            let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
-            let report = SetupReport {
-                chosen: Some(Source::WinALS),
-                tried,
-                desktop_guard: guard,
-                used_mock: false,
-                duration: t0.elapsed(),
-            };
-            return Ok((dev, report));
-        }
-    }
-
-    // Linux iio chain
-    #[cfg(all(
-        target_os = "linux",
-        any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
-    ))]
-    {
-        // First try dbus (iio-sensor-proxy), then direct /sys
-        tried.push(Source::LinuxTilt);
-        if let Ok(dev) = backend_linux::LinuxAngle::open_tilt(cfg.hz).await {
-            let dev: AngleClient = Box::new(dev);
-            dev.set_smoothing(cfg.smoothing_init);
-            let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
-            let report = SetupReport {
-                chosen: Some(Source::LinuxTilt),
-                tried,
-                desktop_guard: guard,
-                used_mock: false,
-                duration: t0.elapsed(),
-            };
-            return Ok((dev, report));
-        }
-
-        tried.push(Source::LinuxALS);
-        if let Ok(dev) = backend_linux::LinuxAngle::open_als(cfg.hz).await {
-            let dev: AngleClient = Box::new(dev);
-            dev.set_smoothing(cfg.smoothing_init);
-            let dev: AngleClient = Gated::wrap(dev, 0.70, 0.65);
-            let report = SetupReport {
-                chosen: Some(Source::LinuxALS),
-                tried,
-                desktop_guard: guard,
-                used_mock: false,
-                duration: t0.elapsed(),
-            };
-            return Ok((dev, report));
-        }
-    }
-
-    let msg = format!("no suitable backend available; tried: {tried:?}");
-    Err(Error::Backend(msg))
+    Err(Error::NoBackend { tried })
 }
 
-// ===== Public API (thin) =====
+// ===== Public API =====
 
-/// Async: open with just a frequency (Hz).
 pub async fn open(hz: f32) -> Result<AngleClient> {
-    let (dev, _report) = init(InitConfig::new(hz)).await?;
-    Ok(dev)
+    open_with_config(OpenConfig::new(hz)).await
 }
 
-/// Async: open with options (allow_mock, smoothing, discovery, etc.)
-pub async fn open_with(opts: OpenOptions) -> Result<AngleClient> {
-    let (dev, _report) = init(InitConfig {
-        hz: opts.hz,
-        smoothing_init: opts.smoothing_init,
-        allow_mock: opts.allow_mock,
-        timeout: opts.timeout,
-        discovery: opts.discovery,
-    })
-    .await?;
-    Ok(dev)
+pub async fn open_with_config(cfg: OpenConfig) -> Result<AngleClient> {
+    let init = InitConfig::from_open(cfg)?;
+    init_all(init).await
 }
 
-/// Blocking: open with just a frequency (Hz).
-/// Uses a global multithreaded Tokio runtime — avoid calling from async contexts.
 pub fn open_blocking(hz: f32) -> Result<AngleClient> {
-    let (dev, _report) = RUNTIME.block_on(init(InitConfig::new(hz)))?;
-    Ok(dev)
+    open_blocking_with_config(OpenConfig::new(hz))
 }
 
-/// Blocking: open with options.
-/// Uses a global multithreaded Tokio runtime — avoid calling from async contexts.
-pub fn open_blocking_with(opts: OpenOptions) -> Result<AngleClient> {
-    let (dev, _report) = RUNTIME.block_on(init(InitConfig {
-        hz: opts.hz,
-        smoothing_init: opts.smoothing_init,
-        allow_mock: opts.allow_mock,
-        timeout: opts.timeout,
-        discovery: opts.discovery,
-    }))?;
-    Ok(dev)
+pub fn open_blocking_with_config(cfg: OpenConfig) -> Result<AngleClient> {
+    let init = InitConfig::from_open(cfg)?;
+    RUNTIME.block_on(init_all(init))
 }
 
-/// Back-compat shim (can be removed in a later release).
-pub async fn open_default(hz: f32) -> Result<AngleClient> {
-    open(hz).await
+pub fn clear_persisted_state() -> Result<()> {
+    persist::clear()
 }
