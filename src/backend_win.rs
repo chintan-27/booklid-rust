@@ -166,7 +166,7 @@ impl WinAngle {
 
                 if let Ok(r) = incl.GetCurrentReading() {
                     if let Ok(pitch) = r.PitchDegrees() {
-                        let deg = (pitch as f32).clamp(-180.0, 180.0);
+                        let deg = pitch.clamp(-180.0, 180.0);
 
                         let a = (*alpha_c.lock().unwrap()).clamp(0.0, 1.0);
                         let s = match smoothed {
@@ -237,8 +237,6 @@ impl WinAngle {
 
                 if let Ok(r) = ls.GetCurrentReading() {
                     if let Ok(lux) = r.IlluminanceInLux() {
-                        let lux = lux as f32;
-
                         baseline = 0.995 * baseline + 0.005 * lux;
                         let val = lux - baseline;
                         let n = (val * 0.02 + 0.5).clamp(0.0, 1.0);

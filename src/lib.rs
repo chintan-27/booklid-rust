@@ -259,6 +259,33 @@ use gating::Gated;
 // ===== Unified init =====
 
 async fn init_all(cfg: InitConfig) -> Result<AngleClient> {
+    let InitConfig {
+        #[cfg_attr(
+            not(any(
+                feature = "mac_hid_feature",
+                feature = "mac_als",
+                feature = "mock",
+                all(target_os = "windows", feature = "win_sensors"),
+                all(
+                    target_os = "linux",
+                    any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
+                )
+            )),
+            allow(unused_variables)
+        )]
+        hz,
+        smoothing_alpha,
+        min_confidence,
+        prefer_sources,
+        disable_backends,
+        #[cfg_attr(not(feature = "mac_hid_feature"), allow(unused_variables))]
+        discovery,
+        #[cfg_attr(not(feature = "mock"), allow(unused_variables))]
+        allow_mock,
+        diagnostics,
+        persistence,
+    } = cfg;
+
     if !HAS_BACKENDS {
         return Err(Error::Backend(
             "no backends enabled; enable platform features".into(),
@@ -268,7 +295,7 @@ async fn init_all(cfg: InitConfig) -> Result<AngleClient> {
     let mut tried = Vec::new();
 
     // Persistence: try last source first
-    let persisted = if cfg.persistence {
+    let persisted = if persistence {
         persist::load().last_source
     } else {
         None
@@ -286,14 +313,14 @@ async fn init_all(cfg: InitConfig) -> Result<AngleClient> {
         Source::Mock,
     ];
 
-    order.retain(|s| !cfg.disable_backends.contains(s));
+    order.retain(|s| !disable_backends.contains(s));
     if let Some(p) = persisted {
         if order.contains(&p) {
             order.retain(|s| s != &p);
             order.insert(0, p);
         }
     }
-    for p in cfg.prefer_sources.iter().rev() {
+    for p in prefer_sources.iter().rev() {
         if order.contains(p) {
             order.retain(|s| s != p);
             order.insert(0, *p);
@@ -304,49 +331,85 @@ async fn init_all(cfg: InitConfig) -> Result<AngleClient> {
 
     for src in order {
         tried.push(src);
-        let dev = match src {
+
+        // IMPORTANT: unify all backend returns into a single concrete type:
+        // Option<AngleClient> (boxed trait object).
+        let dev: Option<AngleClient> = match src {
             #[cfg(feature = "mac_hid_feature")]
-            Source::HingeFeature if !_guard => backend_hidapi::HidAngle::open(cfg.hz).await.ok(),
+            Source::HingeFeature if !_guard => backend_hidapi::HidAngle::open(hz)
+                .await
+                .ok()
+                .map(|d| Box::new(d) as AngleClient),
+
             #[cfg(feature = "mac_hid_feature")]
-            Source::HingeHid if !_guard => {
-                backend_hidapi::HidAngle::open_with(cfg.hz, cfg.discovery)
-                    .await
-                    .ok()
-            }
+            Source::HingeHid if !_guard => backend_hidapi::HidAngle::open_with(hz, discovery)
+                .await
+                .ok()
+                .map(|d| Box::new(d) as AngleClient),
+
             #[cfg(feature = "mac_als")]
-            Source::ALS => backend_mac_als::AlsAngle::open(cfg.hz).await.ok(),
+            Source::ALS => backend_mac_als::AlsAngle::open(hz)
+                .await
+                .ok()
+                .map(|d| Box::new(d) as AngleClient),
+
             #[cfg(all(target_os = "windows", feature = "win_sensors"))]
-            Source::WinHinge => backend_win::WinAngle::open_hinge(cfg.hz).await.ok(),
+            Source::WinHinge => backend_win::WinAngle::open_hinge(hz)
+                .await
+                .ok()
+                .map(|d| Box::new(d) as AngleClient),
+
             #[cfg(all(target_os = "windows", feature = "win_sensors"))]
-            Source::WinTilt => backend_win::WinAngle::open_tilt(cfg.hz).await.ok(),
+            Source::WinTilt => backend_win::WinAngle::open_tilt(hz)
+                .await
+                .ok()
+                .map(|d| Box::new(d) as AngleClient),
+
             #[cfg(all(target_os = "windows", feature = "win_sensors"))]
-            Source::WinALS => backend_win::WinAngle::open_als(cfg.hz).await.ok(),
+            Source::WinALS => backend_win::WinAngle::open_als(hz)
+                .await
+                .ok()
+                .map(|d| Box::new(d) as AngleClient),
+
             #[cfg(all(
                 target_os = "linux",
                 any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
             ))]
-            Source::LinuxTilt => backend_linux::LinuxAngle::open_tilt(cfg.hz).await.ok(),
+            Source::LinuxTilt => backend_linux::LinuxAngle::open_tilt(hz)
+                .await
+                .ok()
+                .map(|d| Box::new(d) as AngleClient),
+
             #[cfg(all(
                 target_os = "linux",
                 any(feature = "linux_iio_proxy", feature = "linux_iio_sys")
             ))]
-            Source::LinuxALS => backend_linux::LinuxAngle::open_als(cfg.hz).await.ok(),
+            Source::LinuxALS => backend_linux::LinuxAngle::open_als(hz)
+                .await
+                .ok()
+                .map(|d| Box::new(d) as AngleClient),
+
             #[cfg(feature = "mock")]
-            Source::Mock if cfg.allow_mock => backend_mock::MockAngle::open(cfg.hz).await.ok(),
+            Source::Mock if allow_mock => backend_mock::MockAngle::open(hz)
+                .await
+                .ok()
+                .map(|d| Box::new(d) as AngleClient),
+
             _ => None,
         };
 
         if let Some(dev) = dev {
-            let dev: AngleClient = Box::new(dev);
-            dev.set_smoothing(cfg.smoothing_alpha);
-            let dev = Gated::wrap(dev, cfg.min_confidence);
-            if cfg.persistence {
+            dev.set_smoothing(smoothing_alpha);
+            let dev = Gated::wrap(dev, min_confidence);
+
+            if persistence {
                 persist::store(&persist::PersistedState {
                     last_source: Some(src),
                 })
                 .ok();
             }
-            if cfg.diagnostics {
+
+            if diagnostics {
                 eprintln!("booklid: chosen={:?} tried={:?}", src, tried);
             }
             return Ok(dev);
