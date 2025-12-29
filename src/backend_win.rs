@@ -11,7 +11,9 @@ use tokio::{
     time::{self, Duration},
 };
 use tokio_stream::wrappers::BroadcastStream;
-use windows::Devices::Sensors::{HingeAngleSensor, Inclinometer, LightSensor};
+use windows::Devices::Sensors::{
+    HingeAngleSensor, HingeAngleSensorReadingChangedEventArgs, Inclinometer, LightSensor,
+};
 use windows::Foundation::TypedEventHandler;
 
 pub struct WinAngle {
@@ -25,11 +27,10 @@ pub struct WinAngle {
 
 impl WinAngle {
     pub async fn open_hinge(hz: f32) -> Result<Self> {
-        unsafe {
-            let sensor = HingeAngleSensor::GetDefault()
-                .map_err(|e| Error::Backend(format!("win hinge: {e:?}")))?;
-            Self::spawn_from_hinge(sensor, hz).await
-        }
+        // windows-rs 0.58: call statics via the statics interface helper.
+        let sensor = HingeAngleSensor::IHingeAngleSensorStatics(|s| s.GetDefault())
+            .map_err(|e| Error::Backend(format!("win hinge: {e:?}")))?;
+        Self::spawn_from_hinge(sensor, hz).await
     }
 
     pub async fn open_tilt(hz: f32) -> Result<Self> {
@@ -69,8 +70,11 @@ impl WinAngle {
             let angle_cell_c = angle_cell.clone();
 
             let _token = sensor
-                .ReadingChanged(&TypedEventHandler::new(move |_, args| {
-                    if let Some(args) = args {
+                .ReadingChanged(&TypedEventHandler::<
+                    HingeAngleSensor,
+                    HingeAngleSensorReadingChangedEventArgs,
+                >::new(move |_, args| {
+                    if let Some(args) = args.as_ref() {
                         if let Ok(reading) = args.Reading() {
                             if let Ok(deg) = reading.AngleInDegrees() {
                                 *angle_cell_c.lock().unwrap() = Some(deg as f32);
@@ -158,45 +162,41 @@ impl WinAngle {
 
             loop {
                 interval.tick().await;
-                unsafe {
-                    if let Ok(reading) = incl.GetCurrentReading() {
-                        if let Some(r) = reading {
-                            let pitch = r.PitchDegrees().unwrap_or(0.0) as f32;
-                            let deg = pitch.clamp(-180.0, 180.0);
+                if let Some(r) = reading {
+                    let pitch = r.PitchDegrees().unwrap_or(0.0) as f32;
+                    let deg = pitch.clamp(-180.0, 180.0);
 
-                            let a = (*alpha_c.lock().unwrap()).clamp(0.0, 1.0);
-                            let s = match smoothed {
-                                None => deg,
-                                Some(prev) => prev + a * (deg - prev),
-                            };
-                            smoothed = Some(s);
+                    let a = (*alpha_c.lock().unwrap()).clamp(0.0, 1.0);
+                    let s = match smoothed {
+                        None => deg,
+                        Some(prev) => prev + a * (deg - prev),
+                    };
+                    smoothed = Some(s);
 
-                            if buf.len() == 64 {
-                                buf.pop_front();
-                            }
-                            buf.push_back(s);
-                            let n = buf.len() as f32;
-                            let mean = buf.iter().copied().sum::<f32>() / n;
-                            let var = buf
-                                .iter()
-                                .map(|v| {
-                                    let d = *v - mean;
-                                    d * d
-                                })
-                                .sum::<f32>()
-                                / n;
-                            let stability = (1.0 / (1.0 + 0.05 * var)).clamp(0.0, 1.0);
-                            *conf_c.lock().unwrap() = stability;
-
-                            let sample = AngleSample {
-                                angle_deg: s,
-                                timestamp: Instant::now(),
-                                source: Source::WinTilt,
-                            };
-                            *latest_c.lock().unwrap() = Some(sample);
-                            let _ = tx_c.send(sample);
-                        }
+                    if buf.len() == 64 {
+                        buf.pop_front();
                     }
+                    buf.push_back(s);
+                    let n = buf.len() as f32;
+                    let mean = buf.iter().copied().sum::<f32>() / n;
+                    let var = buf
+                        .iter()
+                        .map(|v| {
+                            let d = *v - mean;
+                            d * d
+                        })
+                        .sum::<f32>()
+                        / n;
+                    let stability = (1.0 / (1.0 + 0.05 * var)).clamp(0.0, 1.0);
+                    *conf_c.lock().unwrap() = stability;
+
+                    let sample = AngleSample {
+                        angle_deg: s,
+                        timestamp: Instant::now(),
+                        source: Source::WinTilt,
+                    };
+                    *latest_c.lock().unwrap() = Some(sample);
+                    let _ = tx_c.send(sample);
                 }
             }
         });
@@ -231,47 +231,43 @@ impl WinAngle {
 
             loop {
                 interval.tick().await;
-                unsafe {
-                    if let Ok(reading) = ls.GetCurrentReading() {
-                        if let Some(r) = reading {
-                            let lux = r.IlluminanceInLux().unwrap_or(1.0) as f32;
+                if let Some(r) = reading {
+                    let lux = r.IlluminanceInLux().unwrap_or(1.0) as f32;
 
-                            baseline = 0.995 * baseline + 0.005 * lux;
-                            let val = lux - baseline;
-                            let n = (val * 0.02 + 0.5).clamp(0.0, 1.0);
+                    baseline = 0.995 * baseline + 0.005 * lux;
+                    let val = lux - baseline;
+                    let n = (val * 0.02 + 0.5).clamp(0.0, 1.0);
 
-                            let a = (*alpha_c.lock().unwrap()).clamp(0.0, 1.0);
-                            let s = match smoothed {
-                                None => n,
-                                Some(prev) => prev + a * (n - prev),
-                            };
-                            smoothed = Some(s);
+                    let a = (*alpha_c.lock().unwrap()).clamp(0.0, 1.0);
+                    let s = match smoothed {
+                        None => n,
+                        Some(prev) => prev + a * (n - prev),
+                    };
+                    smoothed = Some(s);
 
-                            if buf.len() == 64 {
-                                buf.pop_front();
-                            }
-                            buf.push_back(s);
-                            let m = buf.iter().copied().sum::<f32>() / (buf.len() as f32);
-                            let v = buf
-                                .iter()
-                                .map(|v| {
-                                    let d = *v - m;
-                                    d * d
-                                })
-                                .sum::<f32>()
-                                / (buf.len() as f32);
-                            let stability = (1.0 / (1.0 + 20.0 * v)).clamp(0.0, 1.0);
-                            *conf_c.lock().unwrap() = stability;
-
-                            let sample = AngleSample {
-                                angle_deg: s,
-                                timestamp: Instant::now(),
-                                source: Source::WinALS,
-                            };
-                            *latest_c.lock().unwrap() = Some(sample);
-                            let _ = tx_c.send(sample);
-                        }
+                    if buf.len() == 64 {
+                        buf.pop_front();
                     }
+                    buf.push_back(s);
+                    let m = buf.iter().copied().sum::<f32>() / (buf.len() as f32);
+                    let v = buf
+                        .iter()
+                        .map(|v| {
+                            let d = *v - m;
+                            d * d
+                        })
+                        .sum::<f32>()
+                        / (buf.len() as f32);
+                    let stability = (1.0 / (1.0 + 20.0 * v)).clamp(0.0, 1.0);
+                    *conf_c.lock().unwrap() = stability;
+
+                    let sample = AngleSample {
+                        angle_deg: s,
+                        timestamp: Instant::now(),
+                        source: Source::WinALS,
+                    };
+                    *latest_c.lock().unwrap() = Some(sample);
+                    let _ = tx_c.send(sample);
                 }
             }
         });
