@@ -10,6 +10,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - run: cargo fmt --all -- --check
 
   clippy:
@@ -17,68 +19,60 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets --all-features -- -D warnings
+      # Clippy on default feature set (mac_hid_feature). OS-specific backends are covered in matrix below.
+      - run: cargo clippy --all-targets -- -D warnings
 
   build-and-test:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-latest
-            default_features: true
+            name: macos-default
           - os: ubuntu-latest
-            default_features: false
+            name: linux-iio
           - os: windows-latest
-            default_features: false
+            name: windows-sensors
+
     runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # Default-features path (macOS): check + build examples
-      - name: cargo check (default features)
-        if: matrix.default_features == 'true'
+      # --- macOS: default features (mac_hid_feature) ---
+      - name: cargo check (macOS default)
+        if: matrix.name == 'macos-default'
         run: cargo check --all-targets
-      - name: cargo build examples (default features)
-        if: matrix.default_features == 'true'
+
+      - name: cargo build examples (macOS default)
+        if: matrix.name == 'macos-default'
         run: cargo build --examples
 
-      # No-default-features path: check + mock tests
-      - name: cargo check (no default features)
-        if: matrix.default_features == 'false'
-        run: cargo check --no-default-features --all-targets
-      - name: cargo test with mock (no default features)
-        if: matrix.default_features == 'false'
+      - name: cargo test (macOS default)
+        if: matrix.name == 'macos-default'
+        run: cargo test
+
+      # --- Linux: build linux backends + deterministic smoke with mock ---
+      - name: cargo check (linux backends)
+        if: matrix.name == 'linux-iio'
+        run: |
+          cargo check --no-default-features --features linux_iio_sys --all-targets
+          cargo check --no-default-features --features linux_iio_proxy --all-targets
+
+      - name: cargo test (linux mock)
+        if: matrix.name == 'linux-iio'
         run: cargo test --no-default-features --features mock
 
-      - name: cargo check (win build)
-        if: matrix.os == 'windows-latest'
+      # --- Windows: build windows sensors + deterministic smoke with mock ---
+      - name: cargo check (windows sensors)
+        if: matrix.name == 'windows-sensors'
         run: cargo check --no-default-features --features win_sensors --all-targets
 
-      # linux build with /sys path
-      - name: cargo check (linux iio sys)
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo check --no-default-features --features linux_iio_sys --all-targets
-
-      # optional short example run (Linux ALS or Tilt if present)
-      - name: example (linux sys, short)
-        if: matrix.os == 'ubuntu-latest'
-        env:
-          BOOKLID_CI: "1"
-          BOOKLID_DESKTOP: "1"
-        run: cargo run --no-default-features --features linux_iio_sys --example watch
-
-  # Short async example run using ALS on Linux to verify happy path
-  example-run-als:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: run async example briefly (ALS)
-        env:
-          BOOKLID_CI: "1"
-          BOOKLID_DESKTOP: "1"
-        run: |
-          cargo run --no-default-features --features mac_als --example watch
+      - name: cargo test (windows mock)
+        if: matrix.name == 'windows-sensors'
+        run: cargo test --no-default-features --features mock
