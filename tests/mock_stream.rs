@@ -1,12 +1,13 @@
 #![cfg(feature = "mock")]
 
-use booklid_rust::{OpenOptions, open_with};
+use booklid_rust::{OpenConfig, open_with_config};
+
 use futures_util::StreamExt;
 use tokio::time::{Duration, sleep, timeout};
 
 #[tokio::test(flavor = "current_thread")]
 async fn open_with_mock_returns_and_latest_updates() {
-    let dev = open_with(OpenOptions::new(60.0).allow_mock(true))
+    let dev = open_with_config(OpenConfig::new(60.0).allow_mock(true))
         .await
         .expect("open mock");
     // latest should become Some within ~1s
@@ -23,7 +24,7 @@ async fn open_with_mock_returns_and_latest_updates() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn subscribe_yields_items_quickly() {
-    let dev = open_with(OpenOptions::new(60.0).allow_mock(true))
+    let dev = open_with_config(OpenConfig::new(60.0).allow_mock(true))
         .await
         .expect("open mock");
     let mut s = dev.subscribe();
@@ -37,7 +38,7 @@ async fn subscribe_yields_items_quickly() {
 async fn smoothing_reduces_jitter() {
     // use futures_util::StreamExt;
 
-    let dev = open_with(OpenOptions::new(120.0).allow_mock(true))
+    let dev = open_with_config(OpenConfig::new(60.0).allow_mock(true))
         .await
         .expect("open mock");
 
