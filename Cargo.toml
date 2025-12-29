@@ -3,28 +3,39 @@ name = "booklid-rust"
 version = "1.0.0"
 edition = "2024"
 rust-version = "1.85.0"
-description = "Read laptop lid angle (degrees) with async or blocking apps (macOS/Windows/Linux)"
+description = "Read laptop lid angle (degrees) with async or blocking apps (macOS / Windows / Linux)"
 repository = "https://github.com/chintan-27/booklid-rust"
+homepage = "https://github.com/chintan-27/booklid-rust"
 license = "MIT"
 readme = "README.md"
 
 [features]
+# Default to macOS HID hinge support
 default = ["mac_hid_feature"]
+
+# macOS
 mac_hid_feature = ["dep:hidapi"]
 mac_hid_discovery = []
 mac_iokit_raw = []
 mac_als = []
-win_sensors = ["windows"]
-linux_iio_proxy = ["zbus"]
+
+# Windows
+win_sensors = ["dep:windows"]
+
+# Linux
+linux_iio_proxy = ["dep:zbus"]
 linux_iio_sys = []
+
+# Testing only
 mock = ["dep:anyhow"]
-diagnostics = []
 
 [dependencies]
 futures-core = "0.3"
 futures-util = "0.3"
+
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+
 thiserror = "1"
 once_cell = "1"
 
@@ -33,11 +44,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 directories = "5"
 
-# Optional backends (link them to features)
+# Optional backends
 hidapi = { version = "2", optional = true }
 anyhow = { version = "1", optional = true }
 
-# Windows
+# Windows (WinRT sensors)
 windows = { version = "0.58", optional = true, features = [
   "Devices_Sensors",
   "Foundation",
