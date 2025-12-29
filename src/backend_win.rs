@@ -27,10 +27,11 @@ pub struct WinAngle {
 
 impl WinAngle {
     pub async fn open_hinge(hz: f32) -> Result<Self> {
-        // Prefer inherent method if present in this binding set
+        // WinRT async ops (IAsyncOperation<T>) are not Rust Futures in windows-rs 0.58,
+        // so use `.get()` to block until completion.
         let sensor = HingeAngleSensor::GetDefaultAsync()
             .map_err(|e| Error::Backend(format!("win hinge: {e:?}")))?
-            .await
+            .get()
             .map_err(|e| Error::Backend(format!("win hinge: {e:?}")))?;
 
         Self::spawn_from_hinge(sensor, hz).await

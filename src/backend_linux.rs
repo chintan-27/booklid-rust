@@ -7,7 +7,7 @@ use crate::{AngleDevice, AngleSample, AngleStream, DeviceInfo, Error, Result, So
 use futures_util::StreamExt;
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -510,7 +510,7 @@ fn find_iio_accel_device() -> Option<PathBuf> {
     None
 }
 
-fn read_accel_triplet(dev: &PathBuf) -> Option<(f32, f32, f32)> {
+fn read_accel_triplet(dev: &Path) -> Option<(f32, f32, f32)> {
     let rxp = first_existing(dev, &["in_accel_x_raw", "in_accel_x_input"])?;
     let ryp = first_existing(dev, &["in_accel_y_raw", "in_accel_y_input"])?;
     let rzp = first_existing(dev, &["in_accel_z_raw", "in_accel_z_input"])?;
@@ -559,7 +559,7 @@ fn find_iio_light_device() -> Option<PathBuf> {
     None
 }
 
-fn read_lux(dev: &PathBuf) -> Option<f32> {
+fn read_lux(dev: &Path) -> Option<f32> {
     let valp = first_existing(
         dev,
         &[
@@ -616,7 +616,7 @@ fn find_hwmon_light_input() -> Option<PathBuf> {
     None
 }
 
-fn read_hwmon_lux(input_file: &PathBuf) -> Option<f32> {
+fn read_hwmon_lux(input_file: &Path) -> Option<f32> {
     // Many hwmon drivers already expose scaled units; just parse as f32
     let s = fs::read_to_string(input_file).ok()?;
     // Some drivers expose millilux; try to detect
