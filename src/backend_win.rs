@@ -37,13 +37,14 @@ impl WinAngle {
     }
 
     pub async fn open_tilt(hz: f32) -> Result<Self> {
-        let incl =
-            Inclinometer::GetDefault().map_err(|e| Error::Backend(format!("win inclinometer: {e:?}")))?;
+        let incl = Inclinometer::GetDefault()
+            .map_err(|e| Error::Backend(format!("win inclinometer: {e:?}")))?;
         Self::spawn_from_tilt(incl, hz).await
     }
 
     pub async fn open_als(hz: f32) -> Result<Self> {
-        let ls = LightSensor::GetDefault().map_err(|e| Error::Backend(format!("win light: {e:?}")))?;
+        let ls =
+            LightSensor::GetDefault().map_err(|e| Error::Backend(format!("win light: {e:?}")))?;
         Self::spawn_from_als(ls, hz).await
     }
 
@@ -69,20 +70,19 @@ impl WinAngle {
 
             // Keep token alive in this task
             let _token = sensor
-                .ReadingChanged(
-                    &TypedEventHandler::<HingeAngleSensor, HingeAngleSensorReadingChangedEventArgs>::new(
-                        move |_, args| {
-                            if let Some(args) = args.as_ref() {
-                                if let Ok(reading) = args.Reading() {
-                                    if let Ok(deg) = reading.AngleInDegrees() {
-                                        *angle_cell_c.lock().unwrap() = Some(deg as f32);
-                                    }
-                                }
+                .ReadingChanged(&TypedEventHandler::<
+                    HingeAngleSensor,
+                    HingeAngleSensorReadingChangedEventArgs,
+                >::new(move |_, args| {
+                    if let Some(args) = args.as_ref() {
+                        if let Ok(reading) = args.Reading() {
+                            if let Ok(deg) = reading.AngleInDegrees() {
+                                *angle_cell_c.lock().unwrap() = Some(deg as f32);
                             }
-                            Ok(())
-                        },
-                    ),
-                )
+                        }
+                    }
+                    Ok(())
+                }))
                 .ok();
 
             let mut smoothed: Option<f32> = None;
