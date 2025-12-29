@@ -1,17 +1,17 @@
-use booklid_rust::{OpenOptions, open_with};
+use booklid_rust::{OpenConfig, open_with_config};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Allow mock explicitly; run with: --no-default-features --features mock
-    let opts = OpenOptions::new(60.0).smoothing(0.3).allow_mock(true);
-    let dev = open_with(opts).await?;
-    println!("Mock/watch source={:?}", dev.info().source);
+async fn main() -> booklid_rust::Result<()> {
+    let cfg = OpenConfig::new(60.0).allow_mock(true).diagnostics(true);
+
+    let dev = open_with_config(cfg).await?;
+
     loop {
         if let Some(s) = dev.latest() {
-            println!("{:6.2}°  [{:?}]", s.angle_deg, s.source);
+            println!("conf={:.2} val={:.3}", dev.confidence(), s.angle_deg);
         } else {
-            println!("(waiting for samples…)");
+            println!("waiting… conf={:.2}", dev.confidence());
         }
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 }
