@@ -241,5 +241,3 @@ cargo run --example mock_watch --no-default-features --features mock
 MIT
 
 ```
-
----
