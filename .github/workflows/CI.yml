@@ -14,16 +14,29 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
-  clippy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      # Clippy on default feature set (mac_hid_feature). OS-specific backends are covered in matrix below.
-      - run: cargo clippy --all-targets -- -D warnings
+clippy:
+  strategy:
+    fail-fast: false
+    matrix:
+      include:
+        - os: macos-latest
+          name: macos-default
+          cmd: cargo clippy --all-targets -- -D warnings
+        - os: ubuntu-latest
+          name: linux-iio-sys
+          cmd: cargo clippy --no-default-features --features linux_iio_sys --all-targets -- -D warnings
+        - os: windows-latest
+          name: windows-sensors
+          cmd: cargo clippy --no-default-features --features win_sensors --all-targets -- -D warnings
+
+  runs-on: ${{ matrix.os }}
+  steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+    - uses: Swatinem/rust-cache@v2
+    - run: ${{ matrix.cmd }}
 
   build-and-test:
     strategy:
