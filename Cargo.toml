@@ -13,6 +13,8 @@ readme = "README.md"
 # Default to macOS HID hinge support
 default = ["mac_hid_feature"]
 
+diagnostics = []
+
 # macOS
 mac_hid_feature = ["dep:hidapi"]
 mac_hid_discovery = []
